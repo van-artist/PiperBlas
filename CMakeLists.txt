@@ -7,6 +7,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(OPENBLAS_ROOT "/opt/homebrew/opt/openblas")
 set(Eigen3_DIR "/opt/homebrew/lib/cmake/eigen3")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
 
 find_package(BLAS REQUIRED)
 find_package(Eigen3 3.3 CONFIG REQUIRED)
