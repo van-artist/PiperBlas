@@ -14,4 +14,4 @@ typedef struct
     size_t *row_ptr; // length n_rows + 1
     size_t *col_idx;
     double *values;
-} CSR;
+} pi_csr;

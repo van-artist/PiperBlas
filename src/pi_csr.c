@@ -2,9 +2,9 @@
 #include <stdio.h>
 #include "pi_type.h"
 
-CSR *csr_create(size_t n_rows, size_t n_cols, size_t nnz)
+pi_csr *csr_create(size_t n_rows, size_t n_cols, size_t nnz)
 {
-    CSR *A = (CSR *)malloc(sizeof(CSR));
+    pi_csr *A = (pi_csr *)malloc(sizeof(pi_csr));
     if (!A)
         return NULL;
 
@@ -27,7 +27,7 @@ CSR *csr_create(size_t n_rows, size_t n_cols, size_t nnz)
     return A;
 }
 
-void csr_destroy(CSR *A)
+void csr_destroy(pi_csr *A)
 {
     if (!A)
         return;
@@ -37,11 +37,11 @@ void csr_destroy(CSR *A)
     free(A);
 }
 
-void csr_print(const CSR *A)
+void csr_print(const pi_csr *A)
 {
     if (!A)
         return;
-    printf("CSR Matrix: %zu x %zu, nnz = %zu\n", A->n_rows, A->n_cols, A->nnz);
+    printf("pi_csr Matrix: %zu x %zu, nnz = %zu\n", A->n_rows, A->n_cols, A->nnz);
     printf("row_ptr: ");
     for (size_t i = 0; i < A->n_rows + 1; ++i)
         printf("%zu ", A->row_ptr[i]);

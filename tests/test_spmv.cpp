@@ -44,7 +44,7 @@ static void fill(double *x, size_t n, uint64_t *seed)
         x[i] = rnd(seed);
 }
 
-static CSR *csr_random(size_t n_rows, size_t n_cols, double density, uint64_t *seed)
+static pi_csr *csr_random(size_t n_rows, size_t n_cols, double density, uint64_t *seed)
 {
     if (density <= 0.0)
         density = 1.0 / (double)n_cols;
@@ -121,7 +121,7 @@ static CSR *csr_random(size_t n_rows, size_t n_cols, double density, uint64_t *s
         for (size_t t = start; t < pos; ++t)
             values[t] = rnd(seed);
     }
-    CSR *A = (CSR *)xalloc(sizeof(CSR));
+    pi_csr *A = (pi_csr *)xalloc(sizeof(pi_csr));
     A->n_rows = n_rows;
     A->n_cols = n_cols;
     A->nnz = nnz;
@@ -131,7 +131,7 @@ static CSR *csr_random(size_t n_rows, size_t n_cols, double density, uint64_t *s
     return A;
 }
 
-static void csr_destroy(CSR *A)
+static void csr_destroy(pi_csr *A)
 {
     if (!A)
         return;
@@ -164,7 +164,7 @@ int main(int argc, char **argv)
         size_t N = Ns[t];
         size_t m = N, n = N;
         uint64_t seed = 1;
-        CSR *A = csr_random(m, n, density, &seed);
+        pi_csr *A = csr_random(m, n, density, &seed);
         size_t nnz = A->nnz;
         double *x = (double *)xalloc(n * sizeof(double));
         double *y1 = (double *)xalloc(m * sizeof(double));
