@@ -1,6 +1,8 @@
-#include "utils.hpp"
-#include <cstddef>
-#include <cstring>
+#include <string.h>
+#include <stddef.h>
+#include "utils.h"
+#include "pi_blas.h"
+#include "pi_type.h"
 
 piState piGemm(double *A, double *B, double *C, double alpha, double beta, size_t m, size_t k, size_t n)
 {
@@ -25,30 +27,35 @@ piState piGemm(double *A, double *B, double *C, double alpha, double beta, size_
         }
     }
 
-    return piSucsess;
+    return piSuccess;
 }
 
 piState piGeMV(double *A, double *B, double *C, double alpha, double beta, size_t m, size_t k)
 {
-    return piSucsess;
+    return piSuccess;
 }
 
-piState piSpMV(size_t *A_column_id, size_t *A_row_pointer, double *A_weight, double *x, double *y, size_t m, size_t n, size_t l_x, size_t l_y)
+piState piSpMV(const CSR *A, double *x, double *y,
+               size_t l_x, size_t l_y)
 {
     // m是A_column_id和A_weight的数组长度
     // n是A_row_pointer的数组长度,同时也是A的行数+1
     // l_y是y的向量维度
     // l_x是x的向量维度
+
+    size_t m = A->nnz;
+    size_t n = A->n_rows + 1;
+
     memset(y, 0, l_y * sizeof(double));
     for (size_t i = 0; i < n - 1; i++)
     {
-        size_t cur_row_len = A_row_pointer[i + 1] - A_row_pointer[i];
-        for (size_t j = A_row_pointer[i]; j < A_row_pointer[i + 1]; j++)
+        size_t cur_row_len = A->row_ptr[i + 1] - A->row_ptr[i];
+        for (size_t j = A->row_ptr[i]; j < A->row_ptr[i + 1]; j++)
         {
-            size_t cur_col_index = A_column_id[j];
-            y[i] += x[cur_col_index] * A_weight[j];
+            size_t cur_col_index = A->col_idx[j];
+            y[i] += x[cur_col_index] * A->values[j];
         }
     }
 
-    return piSucsess;
+    return piSuccess;
 }

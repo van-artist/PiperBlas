@@ -5,9 +5,11 @@
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
-#include "pi_blas.hpp"
-#include "pi_data.hpp"
-#include "utils.hpp"
+extern "C"
+{
+#include "pi_blas.h"
+#include "pi_type.h"
+}
 
 typedef struct
 {
