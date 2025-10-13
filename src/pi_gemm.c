@@ -85,6 +85,7 @@ piState piGemm(double *A, double *B, double *C, double alpha, double beta, size_
         args[i].B = B;
         args[i].k = k;
         args[i].n = n;
+        args[i].beta = beta;
         args[i].m = single_m;
         if (has_last && i == thread_num - 1)
         {
