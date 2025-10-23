@@ -4,8 +4,7 @@
 #include "pi_blas.h"
 #include "pi_type.h"
 
-piState piSpMV(const pi_csr *A, double *x, double *y,
-               size_t l_x, size_t l_y)
+piState piSpMV(const pi_csr *A, double *x, double *y)
 {
     // m是A_column_id和A_weight的数组长度
     // n是A_row_pointer的数组长度,同时也是A的行数+1
@@ -14,7 +13,7 @@ piState piSpMV(const pi_csr *A, double *x, double *y,
 
     size_t m = A->nnz;
     size_t n = A->n_rows + 1;
-
+    size_t l_y = A->n_cols;
     memset(y, 0, l_y * sizeof(double));
     for (size_t i = 0; i < n - 1; i++)
     {
