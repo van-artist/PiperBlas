@@ -6,6 +6,8 @@
 #include <time.h>
 #include <sys/time.h>
 #include <string.h>
+#include <vector>
+#include <algorithm>
 
 extern "C"
 {
@@ -21,8 +23,6 @@ static double wall_now_gettimeofday(void)
     return (double)tv.tv_sec + (double)tv.tv_usec * 1e-6;
 }
 
-static double cpu_now_clock(void) { return (double)clock() / (double)CLOCKS_PER_SEC; }
-
 static void *xalloc(size_t nbytes)
 {
     void *p = NULL;
@@ -36,30 +36,40 @@ static void *xalloc(size_t nbytes)
 
 typedef struct
 {
-    size_t N, m, n, nnz;
-    double density;
-    double pi_wall, eig_wall;
-    double pi_cpu, eig_cpu;
-    double pi_gflops, eig_gflops;
-    double max_err, l2;
-} Row;
+    double avg, std, best;
+} Stats;
+
+static Stats summarize(const std::vector<double> &v)
+{
+    if (v.empty())
+        return {0, 0, 0};
+    double sum = 0.0, sum2 = 0.0, best = v[0];
+    for (double x : v)
+    {
+        sum += x;
+        sum2 += x * x;
+        if (x < best)
+            best = x;
+    }
+    double n = (double)v.size();
+    double avg = sum / n;
+    double var = fmax(0.0, sum2 / n - avg * avg);
+    return {avg, sqrt(var), best};
+}
 
 int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        fprintf(stderr, "用法: %s <matrix.bin> [density]\n", argv[0]);
+        fprintf(stderr, "用法: %s <matrix.bin> [warmup=2] [iters=10] [cycles=3]\n", argv[0]);
         return 1;
     }
 
-    const char *bin_path = argv[1]; // <-- 新增：从命令行读取 bin 文件路径
-    double density = 0.01;
-    if (argc >= 3)
-        density = atof(argv[2]);
+    const char *bin_path = argv[1];
+    int warmup = (argc >= 3) ? atoi(argv[2]) : 2;
+    int iters = (argc >= 4) ? atoi(argv[3]) : 10;
+    int cycles = (argc >= 5) ? atoi(argv[4]) : 3;
 
-    // ================================
-    // 载入 CSR 矩阵
-    // ================================
     pi_csr A;
     piState st = csr_from_bin(bin_path, &A);
     if (st != piSuccess)
@@ -67,7 +77,6 @@ int main(int argc, char **argv)
         fprintf(stderr, "csr_from_bin 读取失败: %s\n", bin_path);
         return 1;
     }
-
     size_t m = A.n_rows, n = A.n_cols, nnz = A.nnz;
     printf("已加载矩阵: %zu x %zu, nnz = %zu\n", m, n, nnz);
 
@@ -75,48 +84,26 @@ int main(int argc, char **argv)
     double *y1 = (double *)xalloc(m * sizeof(double));
     double *y2 = (double *)xalloc(m * sizeof(double));
 
-    // 填充 x 为随机数
-    uint64_t seed = 1;
+    srand(1);
     for (size_t i = 0; i < n; ++i)
         x[i] = ((double)(rand()) / RAND_MAX) * 2.0 - 1.0;
 
-    memset(y1, 0, m * sizeof(double));
-    memset(y2, 0, m * sizeof(double));
-
-    // Eigen 对照验证
     typedef Eigen::Triplet<double, int> T;
     std::vector<T> trips;
     trips.reserve(nnz);
     for (size_t i = 0; i < m; ++i)
         for (size_t j = A.row_ptr[i]; j < A.row_ptr[i + 1]; ++j)
             trips.emplace_back((int)i, (int)A.col_idx[j], A.values[j]);
-
     Eigen::SparseMatrix<double, Eigen::RowMajor, int> Ae((int)m, (int)n);
     Ae.setFromTriplets(trips.begin(), trips.end());
-
-    // ================================
-    // 自家实现：piSpMV
-    // ================================
-    double w0 = wall_now_gettimeofday();
-    double c0 = cpu_now_clock();
-    piSpMV(&A, x, y1);
-    double c1 = cpu_now_clock();
-    double w1 = wall_now_gettimeofday();
-
-    // ================================
-    // Eigen 实现
-    // ================================
     Eigen::Map<const Eigen::VectorXd> X(x, (Eigen::Index)n);
     Eigen::Map<Eigen::VectorXd> Y2(y2, (Eigen::Index)m);
-    double w2 = wall_now_gettimeofday();
-    double c2 = cpu_now_clock();
-    Y2 = Ae * X;
-    double c3 = cpu_now_clock();
-    double w3 = wall_now_gettimeofday();
 
-    // ================================
-    // 误差对比与性能
-    // ================================
+    // 先做一次正确性验证（不计入统计）
+    memset(y1, 0, m * sizeof(double));
+    memset(y2, 0, m * sizeof(double));
+    piSpMV(&A, x, y1);
+    Y2 = Ae * X;
     double max_err = 0.0, l2 = 0.0;
     for (size_t i = 0; i < m; ++i)
     {
@@ -126,24 +113,60 @@ int main(int argc, char **argv)
         l2 += d * d;
     }
     l2 = sqrt(l2);
-
-    double ops = 2.0 * (double)nnz;
-    double pi_wall = w1 - w0, eig_wall = w3 - w2;
-    double pi_cpu = c1 - c0, eig_cpu = c3 - c2;
-    double gflops_pi = (ops / pi_wall) * 1e-9;
-    double gflops_eig = (ops / eig_wall) * 1e-9;
-
     printf("结果验证: max_err = %.3e, l2 = %.3e\n", max_err, l2);
-    printf("性能: pi_wall=%.6f eig_wall=%.6f pi_GF/s=%.3f eig_GF/s=%.3f\n",
-           pi_wall, eig_wall, gflops_pi, gflops_eig);
 
-    // ================================
-    // 资源释放
-    // ================================
+    const double ops = 2.0 * (double)nnz;
+
+    for (int k = 0; k < warmup; ++k)
+    {
+        piSpMV(&A, x, y1);
+        Y2 = Ae * X;
+    }
+
+    std::vector<double> pi_cycle_avg, eig_cycle_avg;
+    std::vector<double> pi_all, eig_all;
+
+    for (int c = 0; c < cycles; ++c)
+    {
+        double sum_pi = 0.0, sum_eig = 0.0;
+        for (int it = 0; it < iters; ++it)
+        {
+
+            double t0 = wall_now_gettimeofday();
+            piSpMV(&A, x, y1);
+            double t1 = wall_now_gettimeofday();
+            sum_pi += (t1 - t0);
+            pi_all.push_back(t1 - t0);
+
+            double t2 = wall_now_gettimeofday();
+            Y2 = Ae * X;
+            double t3 = wall_now_gettimeofday();
+            sum_eig += (t3 - t2);
+            eig_all.push_back(t3 - t2);
+        }
+        pi_cycle_avg.push_back(sum_pi / iters);
+        eig_cycle_avg.push_back(sum_eig / iters);
+    }
+
+    Stats s_pi = summarize(pi_cycle_avg);
+    Stats s_eig = summarize(eig_cycle_avg);
+    Stats s_pi_all = summarize(pi_all);
+    Stats s_eig_all = summarize(eig_all);
+
+    double gflops_pi_avg = (ops / s_pi.avg) * 1e-9;
+    double gflops_eig_avg = (ops / s_eig.avg) * 1e-9;
+    double gflops_pi_best = (ops / s_pi_all.best) * 1e-9;
+    double gflops_eig_best = (ops / s_eig_all.best) * 1e-9;
+
+    printf("测试配置: warmup=%d iters/周期=%d cycles=%d\n", warmup, iters, cycles);
+    printf("PI:   平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
+           s_pi.avg, s_pi.std, s_pi_all.best, gflops_pi_avg, gflops_pi_best);
+    printf("Eigen:平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
+           s_eig.avg, s_eig.std, s_eig_all.best, gflops_eig_avg, gflops_eig_best);
+
     free(x);
     free(y1);
     free(y2);
     csr_destroy(&A);
-
     return 0;
 }

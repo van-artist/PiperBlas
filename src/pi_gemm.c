@@ -84,7 +84,7 @@ static void *pi_gemm_m(void *arg_)
     return (void *)retval;
 }
 
-piState piGemm(double *A, double *B, double *C, double alpha, double beta, size_t m, size_t k, size_t n)
+piState piGemm(double *__restrict A, double *__restrict B, double *__restrict C, double alpha, double beta, size_t m, size_t k, size_t n)
 {
     // A是m行k列
     // B是k行n列
@@ -155,9 +155,9 @@ piState piGemm(double *A, double *B, double *C, double alpha, double beta, size_
 }
 
 // 二维下A*B子块的gemm逻辑
-static void pi_gemm_block(double *A_block,
-                          double *B_block,
-                          double *C_block,
+static void pi_gemm_block(double *__restrict A_block,
+                          double *__restrict B_block,
+                          double *__restrict C_block,
                           double alpha, double beta,
                           size_t mb, size_t kb, size_t nb,
                           size_t strid_a, size_t strid_b, size_t strid_c)

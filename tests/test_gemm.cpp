@@ -81,7 +81,7 @@ int main()
 
         double w0 = wall_now_gettimeofday();
         double c0 = cpu_now_clock();
-        piGemm(A, B, C1, alpha, beta, m, k, n);
+        piGemm_v2(A, B, C1, alpha, beta, m, k, n);
         double c1 = cpu_now_clock();
         double w1 = wall_now_gettimeofday();
 
