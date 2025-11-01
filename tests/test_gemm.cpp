@@ -9,6 +9,7 @@ extern "C"
 {
 #include "pi_blas.h"
 #include "pi_type.h"
+#include "pi_config.h"
 }
 
 typedef struct
@@ -54,6 +55,7 @@ static void fill(double *x, size_t n, uint64_t *seed)
 
 int main()
 {
+    config_init();
     const size_t Ns[] = {64, 128, 256, 512, 1024, 2048};
     const size_t n_scales = sizeof(Ns) / sizeof(Ns[0]);
     const double alpha = 1.2, beta = 0.8;
@@ -79,7 +81,7 @@ int main()
 
         double w0 = wall_now_gettimeofday();
         double c0 = cpu_now_clock();
-        piGemm(A, B, C1, alpha, beta, m, k, n);
+        piGemm_v2(A, B, C1, alpha, beta, m, k, n);
         double c1 = cpu_now_clock();
         double w1 = wall_now_gettimeofday();
 
