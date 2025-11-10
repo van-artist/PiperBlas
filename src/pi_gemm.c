@@ -2,13 +2,14 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <omp.h>
 #include <pthread.h>
 #include "utils.h"
 #include "pi_blas.h"
 #include "pi_type.h"
 #include "pi_config.h"
 
-#define BLOCK_SIZE 256
+#define BLOCK_SIZE 128
 
 typedef struct
 {
@@ -338,5 +339,67 @@ piState piGemm_v2(double *A, double *B, double *C,
 
     free(threads);
     free(args);
+    return piSuccess;
+}
+
+piState piGemm_v3(double *__restrict A,
+                  double *__restrict B,
+                  double *__restrict C,
+                  double alpha, double beta,
+                  size_t m, size_t k, size_t n)
+{
+    const size_t MB = BLOCK_SIZE, NB = BLOCK_SIZE, KB = BLOCK_SIZE;
+    const int thread_num = config()->thread_num;
+
+#pragma omp parallel num_threads(thread_num)
+    {
+#pragma omp for schedule(static)
+        for (size_t i = 0; i < m; ++i)
+        {
+            double *c = C + i * n;
+            if (beta == 0.0)
+            {
+#pragma omp simd
+                for (size_t j = 0; j < n; ++j)
+                    c[j] = 0.0;
+            }
+            else if (beta != 1.0)
+            {
+#pragma omp simd
+                for (size_t j = 0; j < n; ++j)
+                    c[j] *= beta;
+            }
+        }
+
+        for (size_t ll = 0; ll < k; ll += KB)
+        {
+            const size_t lmax = (ll + KB < k) ? ll + KB : k;
+
+#pragma omp for schedule(static) collapse(2)
+            for (size_t ii = 0; ii < m; ii += MB)
+                for (size_t jj = 0; jj < n; jj += NB)
+                {
+                    const size_t imax = (ii + MB < m) ? ii + MB : m;
+                    const size_t jmax = (jj + NB < n) ? jj + NB : n;
+
+                    for (size_t i = ii; i < imax; ++i)
+                    {
+                        double *__restrict c = C + i * n + jj;
+                        const double *__restrict arow = A + i * k + ll;
+
+                        for (size_t l = ll; l < lmax; ++l)
+                        {
+                            const double aalpha = arow[l - ll] * alpha;
+                            const double *__restrict brow = B + l * n + jj;
+
+#pragma omp simd
+                            for (size_t j = 0; j < (jmax - jj); ++j)
+                                c[j] += aalpha * brow[j];
+                        }
+                    }
+                }
+        }
+    }
+
     return piSuccess;
 }

@@ -81,13 +81,15 @@ int main(int argc, char **argv)
     printf("已加载矩阵: %zu x %zu, nnz = %zu\n", m, n, nnz);
 
     double *x = (double *)xalloc(n * sizeof(double));
-    double *y1 = (double *)xalloc(m * sizeof(double));
-    double *y2 = (double *)xalloc(m * sizeof(double));
+    double *y1 = (double *)xalloc(m * sizeof(double)); // 用于两个实现输出
+    double *y2 = (double *)xalloc(m * sizeof(double)); // Eigen 输出/真值
+    double *yref = y2;                                 // 直接把 y2 作为参考向量
 
     srand(1);
     for (size_t i = 0; i < n; ++i)
         x[i] = ((double)(rand()) / RAND_MAX) * 2.0 - 1.0;
 
+    // 构建 Eigen 稀疏矩阵
     typedef Eigen::Triplet<double, int> T;
     std::vector<T> trips;
     trips.reserve(nnz);
@@ -97,70 +99,99 @@ int main(int argc, char **argv)
     Eigen::SparseMatrix<double, Eigen::RowMajor, int> Ae((int)m, (int)n);
     Ae.setFromTriplets(trips.begin(), trips.end());
     Eigen::Map<const Eigen::VectorXd> X(x, (Eigen::Index)n);
-    Eigen::Map<Eigen::VectorXd> Y2(y2, (Eigen::Index)m);
+    Eigen::Map<Eigen::VectorXd> Yref(yref, (Eigen::Index)m);
 
-    // 先做一次正确性验证（不计入统计）
-    memset(y1, 0, m * sizeof(double));
-    memset(y2, 0, m * sizeof(double));
-    piSpMV(&A, x, y1);
-    Y2 = Ae * X;
-    double max_err = 0.0, l2 = 0.0;
-    for (size_t i = 0; i < m; ++i)
-    {
-        double d = fabs(y1[i] - y2[i]);
-        if (d > max_err)
-            max_err = d;
-        l2 += d * d;
-    }
-    l2 = sqrt(l2);
-    printf("结果验证: max_err = %.3e, l2 = %.3e\n", max_err, l2);
+    // 生成参考结果（不计时）
+    memset(yref, 0, m * sizeof(double));
+    Yref = Ae * X;
 
+    // 计算量（SpMV ~ 2*nnz FLOPs）
     const double ops = 2.0 * (double)nnz;
 
-    for (int k = 0; k < warmup; ++k)
+    struct Impl
     {
-        piSpMV(&A, x, y1);
-        Y2 = Ae * X;
+        const char *name;
+        piState (*fn)(const pi_csr *, double *, double *);
+    } impls[] = {
+        {"PI pthread", &piSpMV},   // 你的 pthread 版本
+        {"PI OpenMP", &piSpMV_v2}, // 你的 OpenMP 版本
+    };
+    const int NIMPL = (int)(sizeof(impls) / sizeof(impls[0]));
+
+    // 先对每个实现做一次正确性验证
+    for (int id = 0; id < NIMPL; ++id)
+    {
+        memset(y1, 0, m * sizeof(double));
+        impls[id].fn(&A, x, y1);
+        double max_err = 0.0, l2 = 0.0;
+        for (size_t i = 0; i < m; ++i)
+        {
+            double d = fabs(y1[i] - yref[i]);
+            if (d > max_err)
+                max_err = d;
+            l2 += d * d;
+        }
+        l2 = sqrt(l2);
+        printf("[%s] 结果验证: max_err = %.3e, l2 = %.3e\n", impls[id].name, max_err, l2);
     }
 
-    std::vector<double> pi_cycle_avg, eig_cycle_avg;
-    std::vector<double> pi_all, eig_all;
-
+    // Eigen 版本的计时统计
+    std::vector<double> eig_cycle_avg, eig_all;
+    for (int k = 0; k < warmup; ++k)
+    { // warmup
+        Yref = Ae * X;
+    }
     for (int c = 0; c < cycles; ++c)
     {
-        double sum_pi = 0.0, sum_eig = 0.0;
+        double sum = 0.0;
         for (int it = 0; it < iters; ++it)
         {
-
             double t0 = wall_now_gettimeofday();
-            piSpMV(&A, x, y1);
+            Yref = Ae * X;
             double t1 = wall_now_gettimeofday();
-            sum_pi += (t1 - t0);
-            pi_all.push_back(t1 - t0);
-
-            double t2 = wall_now_gettimeofday();
-            Y2 = Ae * X;
-            double t3 = wall_now_gettimeofday();
-            sum_eig += (t3 - t2);
-            eig_all.push_back(t3 - t2);
+            sum += (t1 - t0);
+            eig_all.push_back(t1 - t0);
         }
-        pi_cycle_avg.push_back(sum_pi / iters);
-        eig_cycle_avg.push_back(sum_eig / iters);
+        eig_cycle_avg.push_back(sum / iters);
     }
-
-    Stats s_pi = summarize(pi_cycle_avg);
     Stats s_eig = summarize(eig_cycle_avg);
-    Stats s_pi_all = summarize(pi_all);
     Stats s_eig_all = summarize(eig_all);
-
-    double gflops_pi_avg = (ops / s_pi.avg) * 1e-9;
     double gflops_eig_avg = (ops / s_eig.avg) * 1e-9;
-    double gflops_pi_best = (ops / s_pi_all.best) * 1e-9;
     double gflops_eig_best = (ops / s_eig_all.best) * 1e-9;
 
-    printf("测试配置: warmup=%d iters/周期=%d cycles=%d\n", warmup, iters, cycles);
-    printf("PI:   平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
-           s_pi.avg, s_pi.std, s_pi_all.best, gflops_pi_avg, gflops_pi_best);
+    // 两个 PI 实现的计时统计
+    for (int id = 0; id < NIMPL; ++id)
+    {
+        std::vector<double> cyc_avg, all;
+        // warmup
+        for (int k = 0; k < warmup; ++k)
+        {
+            impls[id].fn(&A, x, y1);
+        }
+        // 正式计时
+        for (int c = 0; c < cycles; ++c)
+        {
+            double sum = 0.0;
+            for (int it = 0; it < iters; ++it)
+            {
+                double t0 = wall_now_gettimeofday();
+                impls[id].fn(&A, x, y1);
+                double t1 = wall_now_gettimeofday();
+                sum += (t1 - t0);
+                all.push_back(t1 - t0);
+            }
+            cyc_avg.push_back(sum / iters);
+        }
+        Stats s = summarize(cyc_avg);
+        Stats s_all = summarize(all);
+        double gflops_avg = (ops / s.avg) * 1e-9;
+        double gflops_best = (ops / s_all.best) * 1e-9;
+
+        printf("%s: 平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
+               impls[id].name, s.avg, s.std, s_all.best, gflops_avg, gflops_best);
+    }
+
+    // Eigen 结果
     printf("Eigen:平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
            s_eig.avg, s_eig.std, s_eig_all.best, gflops_eig_avg, gflops_eig_best);
 

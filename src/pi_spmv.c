@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include <omp.h>
 #include "utils.h"
 #include "pi_blas.h"
 #include "pi_type.h"
@@ -142,5 +143,75 @@ piState piSpMV(const pi_csr *__restrict A, double *__restrict x, double *__restr
     free(cuts);
     free(th);
     free(args);
+    return piSuccess;
+}
+
+piState piSpMV_v2(const pi_csr *__restrict A,
+                  double *__restrict x,
+                  double *__restrict y)
+{
+    const size_t n_rows = A->n_rows;
+    const size_t nnz = A->nnz;
+    const size_t *row_ptr = A->row_ptr;
+    const size_t *col_idx = A->col_idx;
+    const double *values = A->values;
+
+    if (n_rows == 0)
+        return piSuccess;
+
+    int thread_num = MIN(config()->thread_num, (int)n_rows);
+    if (thread_num <= 1 || nnz < 1024)
+    {
+        for (size_t i = 0; i < n_rows; ++i)
+        {
+            double acc = 0.0;
+            for (size_t j = row_ptr[i]; j < row_ptr[i + 1]; ++j)
+                acc += x[col_idx[j]] * values[j];
+            y[i] = acc;
+        }
+        return piSuccess;
+    }
+
+    size_t *cuts = (size_t *)malloc((size_t)(thread_num + 1) * sizeof(size_t));
+    if (!cuts)
+        return piErrAlloc;
+    cuts[0] = 0;
+
+    const size_t target = nnz / (size_t)thread_num + 1;
+    size_t acc_nnz = 0;
+    int cur = 1;
+    for (size_t r = 0; r < n_rows && cur < thread_num; ++r)
+    {
+        acc_nnz += (row_ptr[r + 1] - row_ptr[r]);
+        if (acc_nnz >= target)
+        {
+            cuts[cur++] = r + 1;
+            acc_nnz = 0;
+        }
+    }
+    while (cur < thread_num)
+        cuts[cur] = cuts[cur - 1] + 1, ++cur;
+    cuts[thread_num] = n_rows;
+
+#pragma omp parallel for num_threads(thread_num) schedule(static)
+    for (int t = 0; t < thread_num; ++t)
+    {
+        const size_t rb = cuts[t];
+        const size_t re = cuts[t + 1];
+        for (size_t i = rb; i < re; ++i)
+        {
+            double acc = 0.0;
+            const size_t start = row_ptr[i];
+            const size_t end = row_ptr[i + 1];
+
+#pragma omp simd reduction(+ : acc)
+            for (size_t j = start; j < end; ++j)
+                acc += x[col_idx[j]] * values[j];
+
+            y[i] = acc;
+        }
+    }
+
+    free(cuts);
     return piSuccess;
 }
