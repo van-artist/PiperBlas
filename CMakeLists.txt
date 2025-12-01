@@ -39,21 +39,6 @@ target_link_libraries(piperDNN PUBLIC
     Threads::Threads
 )
 
-set(MAIN_SOURCE "")
-if(PIPER_ENABLE_CUDA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cu")
-    set(MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cu")
-elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
-    set(MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
-endif()
-
-if(MAIN_SOURCE)
-    add_executable(piper-DNN ${CPU_SRC} ${MAIN_SOURCE})
-    target_link_libraries(piper-DNN PRIVATE piperDNN)
-    if(PIPER_ENABLE_CUDA AND TARGET pipercuda)
-        target_link_libraries(piper-DNN PRIVATE pipercuda CUDA::cudart)
-    endif()
-endif()
-
 if(PIPER_ENABLE_CUDA)
     find_package(CUDAToolkit REQUIRED)
 
@@ -82,7 +67,26 @@ if(PIPER_ENABLE_CUDA)
     endif()
 endif()
 
+set(MAIN_SOURCE "")
+if(PIPER_ENABLE_CUDA AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cu")
+    set(MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cu")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+    set(MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+endif()
+
+if(MAIN_SOURCE)
+    add_executable(piper-DNN ${CPU_SRC} ${MAIN_SOURCE})
+    target_link_libraries(piper-DNN PRIVATE piperDNN)
+    if(PIPER_ENABLE_CUDA AND TARGET pipercuda)
+        target_link_libraries(piper-DNN PRIVATE pipercuda CUDA::cudart)
+    endif()
+endif()
+
 file(GLOB TEST_SOURCES "tests/*.cpp")
+if(PIPER_ENABLE_CUDA)
+    file(GLOB TEST_SOURCES_CUDA "tests/*.cu")
+    list(APPEND TEST_SOURCES ${TEST_SOURCES_CUDA})
+endif()
 foreach(test_src ${TEST_SOURCES})
     get_filename_component(test_name ${test_src} NAME_WE)
     add_executable(${test_name} ${test_src})
