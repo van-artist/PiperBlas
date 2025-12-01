@@ -5,12 +5,9 @@
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
-extern "C"
-{
 #include "pi_blas.h"
 #include "pi_type.h"
 #include "pi_config.h"
-}
 
 typedef struct
 {

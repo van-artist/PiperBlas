@@ -1,12 +1,12 @@
-#include <string.h>
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <pthread.h>
-#include "utils.h"
 #include "pi_blas.h"
-#include "pi_type.h"
 #include "pi_config.h"
+#include "pi_type.h"
+#include "utils.h"
+
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <pthread.h>
 
 #define BLOCK_SIZE 256
 
@@ -38,10 +38,6 @@ typedef struct
     size_t c_idx_j;
     size_t k; // 全局k
 } pi_gemm_arg_v2;
-typedef struct
-{
-    piState state;
-} pi_gemm_retval;
 
 // 按M纬切分下单个线程的处理
 static void *pi_gemm_m(void *arg_)
@@ -76,12 +72,7 @@ static void *pi_gemm_m(void *arg_)
             }
         }
     }
-
-    pi_gemm_retval *retval = (pi_gemm_retval *)malloc(sizeof(pi_gemm_retval));
-    if (!retval)
-        return NULL;
-    retval->state = piSuccess;
-    return (void *)retval;
+    return NULL;
 }
 
 piState piGemm(double *__restrict A, double *__restrict B, double *__restrict C, double alpha, double beta, size_t m, size_t k, size_t n)
@@ -108,7 +99,7 @@ piState piGemm(double *__restrict A, double *__restrict B, double *__restrict C,
     }
 
     // 准备参数
-    pi_gemm_arg *args = malloc(sizeof(pi_gemm_arg) * thread_num);
+    pi_gemm_arg *args = (pi_gemm_arg *)malloc(sizeof(pi_gemm_arg) * (size_t)thread_num);
     int single_m = m / thread_num;
     int last_m = m % thread_num;
     int has_last = last_m;
@@ -130,27 +121,20 @@ piState piGemm(double *__restrict A, double *__restrict B, double *__restrict C,
         args[i].C = C + offset_c;
     }
     // 创建线程
-    pthread_t *threads = malloc(sizeof(pthread_t) * thread_num);
+    pthread_t *threads = (pthread_t *)malloc(sizeof(pthread_t) * (size_t)thread_num);
 
     for (int i = 0; i < thread_num; i++)
     {
         pthread_create(&threads[i], NULL, pi_gemm_m, &args[i]);
     }
-    // 等待线程
     for (int i = 0; i < thread_num; i++)
     {
-        void *retv = NULL;
-        pthread_join(threads[i], &retv);
-        if (retv)
-        {
-            pi_gemm_retval *r = (pi_gemm_retval *)retv;
-            (void)r;
-            free(r);
-        }
+        pthread_join(threads[i], NULL);
     }
 
-    free(args);
     free(threads);
+    free(args);
+
     return piSuccess;
 }
 
@@ -233,7 +217,6 @@ static void *pi_gemm_mn(void *arg_)
 
         beta_used = 1.0;
     }
-
     return NULL;
 }
 
@@ -278,7 +261,7 @@ piState piGemm_v2(double *A, double *B, double *C,
                 arg.c_idx_j = j;
                 arg.k = k;
 
-                (void)pi_gemm_mn(&arg);
+                pi_gemm_mn(&arg);
             }
         }
         return piSuccess;
@@ -303,7 +286,7 @@ piState piGemm_v2(double *A, double *B, double *C,
             const size_t nb = (j + NB <= n) ? NB : (n - j);
 
             // 准备本块参数
-            pi_gemm_arg_v2 *arg = &args[launched];
+            pi_gemm_arg_v2 *arg = &args[(size_t)launched];
             arg->A = A;
             arg->B = B;
             arg->C = C;
@@ -338,5 +321,6 @@ piState piGemm_v2(double *A, double *B, double *C,
 
     free(threads);
     free(args);
+
     return piSuccess;
 }

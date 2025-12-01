@@ -1,11 +1,11 @@
-#include <string.h>
-#include <stddef.h>
-#include <pthread.h>
-#include <stdlib.h>
-#include "utils.h"
 #include "pi_blas.h"
-#include "pi_type.h"
 #include "pi_config.h"
+#include "pi_type.h"
+#include "utils.h"
+
+#include <cstddef>
+#include <cstdlib>
+#include <pthread.h>
 
 typedef struct
 {
@@ -24,12 +24,7 @@ typedef struct
 
 } pi_spmv_worker_arg;
 
-typedef struct
-{
-    piState state;
-} pi_spmv_worker_retval;
-
-void *pi_spmv_worker(void *arg_)
+static void *pi_spmv_worker(void *arg_)
 {
     pi_spmv_worker_arg *arg = (pi_spmv_worker_arg *)arg_;
     double *__restrict y = arg->y;
@@ -51,10 +46,6 @@ void *pi_spmv_worker(void *arg_)
         }
         y[i] = acc;
     }
-
-    // pi_spmv_worker_retval *retval = (pi_spmv_worker_retval *)malloc(sizeof(pi_spmv_worker_retval));
-    // retval->state = piSuccess;
-    // return (void *)retval;
     return NULL;
 }
 
@@ -128,19 +119,15 @@ piState piSpMV(const pi_csr *__restrict A, double *__restrict x, double *__restr
         args[t].row_begin = cuts[t];
         args[t].row_end = cuts[t + 1];
 
-        int rc = pthread_create(&th[t], NULL, pi_spmv_worker, &args[t]);
+        pthread_create(&th[t], NULL, pi_spmv_worker, &args[t]);
     }
     // 等待线程
     for (int t = 0; t < thread_num; ++t)
-    {
-        // void *retval = malloc(sizeof(pi_spmv_worker_retval));
         pthread_join(th[t], NULL);
-        // 暂时不对返回值做处理（默认成功）
-        // pi_free(retval);
-    }
 
     free(cuts);
     free(th);
     free(args);
+
     return piSuccess;
 }

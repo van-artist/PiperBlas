@@ -8,13 +8,9 @@
 #include <string.h>
 #include <vector>
 #include <algorithm>
-
-extern "C"
-{
 #include "pi_blas.h"
 #include "pi_csr.h"
 #include "pi_type.h"
-}
 
 static double wall_now_gettimeofday(void)
 {
