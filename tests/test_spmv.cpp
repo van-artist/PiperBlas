@@ -1,4 +1,4 @@
-#include <Eigen/Sparse>
+#include <mkl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -77,33 +77,87 @@ int main(int argc, char **argv)
         fprintf(stderr, "csr_from_bin 读取失败: %s\n", bin_path);
         return 1;
     }
-    size_t m = A.n_rows, n = A.n_cols, nnz = A.nnz;
+    size_t m = A.n_rows;
+    size_t n = A.n_cols;
+    size_t nnz = A.nnz;
     printf("已加载矩阵: %zu x %zu, nnz = %zu\n", m, n, nnz);
 
     double *x = (double *)xalloc(n * sizeof(double));
-    double *y1 = (double *)xalloc(m * sizeof(double));
-    double *y2 = (double *)xalloc(m * sizeof(double));
+    double *y1 = (double *)xalloc(m * sizeof(double)); // piSpMV 输出
+    double *y2 = (double *)xalloc(m * sizeof(double)); // MKL SpMV 输出
 
     srand(1);
     for (size_t i = 0; i < n; ++i)
         x[i] = ((double)(rand()) / RAND_MAX) * 2.0 - 1.0;
 
-    typedef Eigen::Triplet<double, int> T;
-    std::vector<T> trips;
-    trips.reserve(nnz);
-    for (size_t i = 0; i < m; ++i)
-        for (size_t j = A.row_ptr[i]; j < A.row_ptr[i + 1]; ++j)
-            trips.emplace_back((int)i, (int)A.col_idx[j], A.values[j]);
-    Eigen::SparseMatrix<double, Eigen::RowMajor, int> Ae((int)m, (int)n);
-    Ae.setFromTriplets(trips.begin(), trips.end());
-    Eigen::Map<const Eigen::VectorXd> X(x, (Eigen::Index)n);
-    Eigen::Map<Eigen::VectorXd> Y2(y2, (Eigen::Index)m);
+    // ======== 构造 MKL CSR 矩阵 ========
+    MKL_INT m_mkl = (MKL_INT)m;
+    MKL_INT n_mkl = (MKL_INT)n;
 
-    // 先做一次正确性验证（不计入统计）
+    std::vector<MKL_INT> mkl_row_ptr(m + 1);
+    std::vector<MKL_INT> mkl_col_idx(nnz);
+    std::vector<double> mkl_values(nnz);
+
+    for (size_t i = 0; i <= m; ++i)
+        mkl_row_ptr[i] = (MKL_INT)A.row_ptr[i];
+    for (size_t j = 0; j < nnz; ++j)
+    {
+        mkl_col_idx[j] = (MKL_INT)A.col_idx[j];
+        mkl_values[j] = A.values[j];
+    }
+
+    sparse_matrix_t Amkl;
+    sparse_status_t status = mkl_sparse_d_create_csr(
+        &Amkl,
+        SPARSE_INDEX_BASE_ZERO,
+        m_mkl,
+        n_mkl,
+        mkl_row_ptr.data(),
+        mkl_row_ptr.data() + 1,
+        mkl_col_idx.data(),
+        mkl_values.data());
+
+    if (status != SPARSE_STATUS_SUCCESS)
+    {
+        fprintf(stderr, "mkl_sparse_d_create_csr 失败, status = %d\n", status);
+        csr_destroy(&A);
+        free(x);
+        free(y1);
+        free(y2);
+        return 1;
+    }
+
+    struct matrix_descr descr;
+    descr.type = SPARSE_MATRIX_TYPE_GENERAL;
+
+    mkl_sparse_optimize(Amkl);
+
+    // ======== 先做一次正确性验证 ========
     memset(y1, 0, m * sizeof(double));
     memset(y2, 0, m * sizeof(double));
+
     piSpMV(&A, x, y1);
-    Y2 = Ae * X;
+
+    status = mkl_sparse_d_mv(
+        SPARSE_OPERATION_NON_TRANSPOSE,
+        1.0,
+        Amkl,
+        descr,
+        x,
+        0.0,
+        y2);
+
+    if (status != SPARSE_STATUS_SUCCESS)
+    {
+        fprintf(stderr, "mkl_sparse_d_mv 失败, status = %d\n", status);
+        mkl_sparse_destroy(Amkl);
+        csr_destroy(&A);
+        free(x);
+        free(y1);
+        free(y2);
+        return 1;
+    }
+
     double max_err = 0.0, l2 = 0.0;
     for (size_t i = 0; i < m; ++i)
     {
@@ -117,21 +171,31 @@ int main(int argc, char **argv)
 
     const double ops = 2.0 * (double)nnz;
 
+    // ======== warmup ========
     for (int k = 0; k < warmup; ++k)
     {
         piSpMV(&A, x, y1);
-        Y2 = Ae * X;
+        mkl_sparse_d_mv(
+            SPARSE_OPERATION_NON_TRANSPOSE,
+            1.0,
+            Amkl,
+            descr,
+            x,
+            0.0,
+            y2);
     }
 
-    std::vector<double> pi_cycle_avg, eig_cycle_avg;
-    std::vector<double> pi_all, eig_all;
+    std::vector<double> pi_cycle_avg, mkl_cycle_avg;
+    std::vector<double> pi_all, mkl_all;
 
+    // ======== 正式计时 ========
     for (int c = 0; c < cycles; ++c)
     {
-        double sum_pi = 0.0, sum_eig = 0.0;
+        double sum_pi = 0.0;
+        double sum_mkl = 0.0;
+
         for (int it = 0; it < iters; ++it)
         {
-
             double t0 = wall_now_gettimeofday();
             piSpMV(&A, x, y1);
             double t1 = wall_now_gettimeofday();
@@ -139,31 +203,40 @@ int main(int argc, char **argv)
             pi_all.push_back(t1 - t0);
 
             double t2 = wall_now_gettimeofday();
-            Y2 = Ae * X;
+            mkl_sparse_d_mv(
+                SPARSE_OPERATION_NON_TRANSPOSE,
+                1.0,
+                Amkl,
+                descr,
+                x,
+                0.0,
+                y2);
             double t3 = wall_now_gettimeofday();
-            sum_eig += (t3 - t2);
-            eig_all.push_back(t3 - t2);
+            sum_mkl += (t3 - t2);
+            mkl_all.push_back(t3 - t2);
         }
+
         pi_cycle_avg.push_back(sum_pi / iters);
-        eig_cycle_avg.push_back(sum_eig / iters);
+        mkl_cycle_avg.push_back(sum_mkl / iters);
     }
 
     Stats s_pi = summarize(pi_cycle_avg);
-    Stats s_eig = summarize(eig_cycle_avg);
+    Stats s_mkl = summarize(mkl_cycle_avg);
     Stats s_pi_all = summarize(pi_all);
-    Stats s_eig_all = summarize(eig_all);
+    Stats s_mkl_all = summarize(mkl_all);
 
     double gflops_pi_avg = (ops / s_pi.avg) * 1e-9;
-    double gflops_eig_avg = (ops / s_eig.avg) * 1e-9;
+    double gflops_mkl_avg = (ops / s_mkl.avg) * 1e-9;
     double gflops_pi_best = (ops / s_pi_all.best) * 1e-9;
-    double gflops_eig_best = (ops / s_eig_all.best) * 1e-9;
+    double gflops_mkl_best = (ops / s_mkl_all.best) * 1e-9;
 
     printf("测试配置: warmup=%d iters/周期=%d cycles=%d\n", warmup, iters, cycles);
     printf("PI:   平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
            s_pi.avg, s_pi.std, s_pi_all.best, gflops_pi_avg, gflops_pi_best);
-    printf("Eigen:平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
-           s_eig.avg, s_eig.std, s_eig_all.best, gflops_eig_avg, gflops_eig_best);
+    printf("MKL:  平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
+           s_mkl.avg, s_mkl.std, s_mkl_all.best, gflops_mkl_avg, gflops_mkl_best);
 
+    mkl_sparse_destroy(Amkl);
     free(x);
     free(y1);
     free(y2);

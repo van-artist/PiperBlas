@@ -56,7 +56,7 @@ static void fill(double *x, size_t n, uint64_t *seed)
 int main()
 {
     config_init();
-    const size_t Ns[] = {64, 128, 256, 512, 1024, 2048};
+    const size_t Ns[] = {64, 128, 256, 512, 1024, 2048, 4096};
     const size_t n_scales = sizeof(Ns) / sizeof(Ns[0]);
     const double alpha = 1.2, beta = 0.8;
     Row rows[sizeof(Ns) / sizeof(Ns[0])];

@@ -2,9 +2,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <stdint.h>
 #include "pi_type.h"
 #include "utils.h"
-#include "util.h"
 
 piState csr_create(size_t n_rows, size_t n_cols, size_t nnz, pi_csr *dist)
 {
