@@ -2,53 +2,49 @@ cmake_minimum_required(VERSION 3.20)
 project(PiperDNN LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
-set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3")
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(PIPER_ENABLE_CUDA "Build CUDA kernels" ON)
+option(PIPER_BUILD_TESTS "Build test binaries" ON)
 
-find_package(BLAS REQUIRED)
+set(CMAKE_CUDA_ARCHITECTURES "70;75;80;86" CACHE STRING "CUDA GPU architectures")
+set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+
 find_package(Threads REQUIRED)
+find_package(BLAS REQUIRED)
 
 set(MKL_ROOT "/opt/intel/oneapi/mkl/latest" CACHE PATH "Path to Intel oneMKL root")
 set(MKL_INCLUDE_DIR "${MKL_ROOT}/include")
 set(MKL_LIBRARY_DIR "${MKL_ROOT}/lib/intel64")
 set(MKL_LIBRARIES mkl_rt pthread m dl)
 
-file(GLOB_RECURSE CPU_SRC CONFIGURE_DEPENDS "src/*.cpp")
-
-add_library(piperDNN STATIC ${CPU_SRC})
-target_include_directories(piperDNN PUBLIC
-    "${OPENBLAS_ROOT}/include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    "${MKL_INCLUDE_DIR}"
-)
-target_link_directories(piperDNN PUBLIC
-    "${OPENBLAS_ROOT}/lib"
-    "${MKL_LIBRARY_DIR}"
-)
-target_link_libraries(piperDNN PUBLIC
-    ${BLAS_LIBRARIES}
-    ${MKL_LIBRARIES}
-    Threads::Threads
-)
-
 if(PIPER_ENABLE_CUDA)
     find_package(CUDAToolkit REQUIRED)
+    set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
+endif()
 
-    file(GLOB_RECURSE CUDA_SRC CONFIGURE_DEPENDS
+file(GLOB CPU_SRC CONFIGURE_DEPENDS "src/*.cpp")
+
+add_library(piperDNN STATIC ${CPU_SRC})
+target_compile_features(piperDNN PUBLIC cxx_std_17)
+target_include_directories(piperDNN PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(piperDNN PUBLIC Threads::Threads)
+
+if(PIPER_ENABLE_CUDA)
+    file(GLOB CUDA_SRC CONFIGURE_DEPENDS
         "src/cuda/*.cu"
         "src/cuda/*.cuh"
     )
 
     if(CUDA_SRC)
         add_library(pipercuda STATIC ${CUDA_SRC})
+        target_compile_features(pipercuda PUBLIC cxx_std_17)
         target_include_directories(pipercuda PUBLIC
             "${CMAKE_CURRENT_SOURCE_DIR}/include"
             "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -62,7 +58,7 @@ if(PIPER_ENABLE_CUDA)
         )
         set_target_properties(pipercuda PROPERTIES
             CUDA_SEPARABLE_COMPILATION ON
-            CUDA_ARCHITECTURES "70;75;80;86"
+            CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
         )
     endif()
 endif()
@@ -75,39 +71,52 @@ elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 endif()
 
 if(MAIN_SOURCE)
-    add_executable(piper-DNN ${CPU_SRC} ${MAIN_SOURCE})
+    add_executable(piper-DNN ${MAIN_SOURCE})
     target_link_libraries(piper-DNN PRIVATE piperDNN)
     if(PIPER_ENABLE_CUDA AND TARGET pipercuda)
         target_link_libraries(piper-DNN PRIVATE pipercuda CUDA::cudart)
+        set_target_properties(piper-DNN PROPERTIES
+            CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+        )
     endif()
 endif()
 
-file(GLOB TEST_SOURCES "tests/*.cpp")
-if(PIPER_ENABLE_CUDA)
-    file(GLOB TEST_SOURCES_CUDA "tests/*.cu")
-    list(APPEND TEST_SOURCES ${TEST_SOURCES_CUDA})
+if(PIPER_BUILD_TESTS)
+    file(GLOB TEST_SOURCES "tests/*.cpp")
+    if(PIPER_ENABLE_CUDA)
+        file(GLOB TEST_SOURCES_CUDA "tests/*.cu")
+        list(APPEND TEST_SOURCES ${TEST_SOURCES_CUDA})
+    endif()
+
+    foreach(test_src IN LISTS TEST_SOURCES)
+        get_filename_component(test_name ${test_src} NAME_WE)
+        add_executable(${test_name} ${test_src})
+
+        target_include_directories(${test_name} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            $<$<BOOL:${PIPER_ENABLE_CUDA}>:${CUDAToolkit_INCLUDE_DIRS}>
+        )
+
+        # BLAS/MKL 仅在需要的测试中链接，避免把纯主机库传给 nvlink
+        if(test_name STREQUAL "test_gemm")
+            target_link_libraries(${test_name} PRIVATE BLAS::BLAS)
+        endif()
+        if(test_name STREQUAL "test_spmv")
+            target_include_directories(${test_name} PRIVATE "${MKL_INCLUDE_DIR}")
+            target_link_directories(${test_name} PRIVATE "${MKL_LIBRARY_DIR}")
+            target_link_libraries(${test_name} PRIVATE ${MKL_LIBRARIES})
+        endif()
+
+        target_link_libraries(${test_name} PRIVATE piperDNN)
+        if(PIPER_ENABLE_CUDA AND TARGET pipercuda)
+            # 只有真正用到 CUDA 的测试才链接 pipercuda，避免无意义的 device link
+            if(test_src MATCHES "\\.cu$" OR test_name STREQUAL "test_axpy")
+                target_link_libraries(${test_name} PRIVATE pipercuda CUDA::cudart CUDA::cublas)
+                set_target_properties(${test_name} PROPERTIES
+                    CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+                )
+            endif()
+        endif()
+    endforeach()
 endif()
-foreach(test_src ${TEST_SOURCES})
-    get_filename_component(test_name ${test_src} NAME_WE)
-    add_executable(${test_name} ${test_src})
-
-    target_include_directories(${test_name} PRIVATE
-        "${OPENBLAS_ROOT}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-        "${MKL_INCLUDE_DIR}"
-        $<$<BOOL:${PIPER_ENABLE_CUDA}>:${CUDAToolkit_INCLUDE_DIRS}>
-    )
-
-    target_link_directories(${test_name} PRIVATE
-        "${OPENBLAS_ROOT}/lib"
-        "${MKL_LIBRARY_DIR}"
-    )
-
-    target_link_libraries(${test_name} PRIVATE
-        piperDNN
-        ${MKL_LIBRARIES}
-        $<$<TARGET_EXISTS:pipercuda>:pipercuda>
-        $<$<TARGET_EXISTS:pipercuda>:CUDA::cudart>
-    )
-endforeach()
