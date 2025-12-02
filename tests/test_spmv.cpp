@@ -1,4 +1,4 @@
-#include <Eigen/Sparse>
+#include <mkl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -6,11 +6,11 @@
 #include <time.h>
 #include <sys/time.h>
 #include <string.h>
-extern "C"
-{
+#include <vector>
+#include <algorithm>
 #include "pi_blas.h"
+#include "pi_csr.h"
 #include "pi_type.h"
-}
 
 static double wall_now_gettimeofday(void)
 {
@@ -18,8 +18,6 @@ static double wall_now_gettimeofday(void)
     gettimeofday(&tv, NULL);
     return (double)tv.tv_sec + (double)tv.tv_usec * 1e-6;
 }
-
-static double cpu_now_clock(void) { return (double)clock() / (double)CLOCKS_PER_SEC; }
 
 static void *xalloc(size_t nbytes)
 {
@@ -32,202 +30,212 @@ static void *xalloc(size_t nbytes)
     return p;
 }
 
-static inline double rnd(uint64_t *seed)
-{
-    *seed = (*seed * 2862933555777941757ULL) + 3037000493ULL;
-    return ((double)(*seed >> 11) / (double)(1ULL << 53)) * 2.0 - 1.0;
-}
-
-static void fill(double *x, size_t n, uint64_t *seed)
-{
-    for (size_t i = 0; i < n; i++)
-        x[i] = rnd(seed);
-}
-
-static CSR *csr_random(size_t n_rows, size_t n_cols, double density, uint64_t *seed)
-{
-    if (density <= 0.0)
-        density = 1.0 / (double)n_cols;
-    if (density > 1.0)
-        density = 1.0;
-    size_t *row_ptr = (size_t *)xalloc((n_rows + 1) * sizeof(size_t));
-    size_t nnz = 0;
-    for (size_t i = 0; i < n_rows; ++i)
-    {
-        size_t cnt = 0;
-        for (size_t j = 0; j < n_cols; ++j)
-        {
-            double u = rnd(seed) * 0.5 + 0.5;
-            if (u < density)
-                ++cnt;
-        }
-        if (cnt == 0)
-            cnt = 1;
-        row_ptr[i] = nnz;
-        nnz += cnt;
-    }
-    row_ptr[n_rows] = nnz;
-    size_t *col_idx = (size_t *)xalloc(nnz * sizeof(size_t));
-    double *values = (double *)xalloc(nnz * sizeof(double));
-    size_t pos = 0;
-    for (size_t i = 0; i < n_rows; ++i)
-    {
-        size_t start = pos;
-        size_t target = row_ptr[i + 1] - row_ptr[i];
-        size_t trials = 0;
-        while (pos - start < target && trials < target * 20 + 100)
-        {
-            size_t c = (size_t)((rnd(seed) * 0.5 + 0.5) * (double)n_cols);
-            if (c >= n_cols)
-                c = n_cols - 1;
-            int dup = 0;
-            for (size_t t = start; t < pos; ++t)
-            {
-                if (col_idx[t] == c)
-                {
-                    dup = 1;
-                    break;
-                }
-            }
-            if (!dup)
-                col_idx[pos++] = c;
-            ++trials;
-        }
-        for (; pos - start < target; ++pos)
-        {
-            col_idx[pos] = (size_t)(((pos - start) * (n_cols / (target ? target : 1))) % n_cols);
-            if (col_idx[pos] >= n_cols)
-                col_idx[pos] = n_cols - 1;
-            for (size_t t = start; t < pos; ++t)
-            {
-                if (col_idx[t] == col_idx[pos])
-                {
-                    col_idx[pos] = (col_idx[pos] + 1) % n_cols;
-                    t = start - 1;
-                }
-            }
-        }
-        for (size_t a = start + 1; a < pos; ++a)
-        {
-            size_t key = col_idx[a];
-            size_t b = a;
-            while (b > start && col_idx[b - 1] > key)
-            {
-                col_idx[b] = col_idx[b - 1];
-                --b;
-            }
-            col_idx[b] = key;
-        }
-        for (size_t t = start; t < pos; ++t)
-            values[t] = rnd(seed);
-    }
-    CSR *A = (CSR *)xalloc(sizeof(CSR));
-    A->n_rows = n_rows;
-    A->n_cols = n_cols;
-    A->nnz = nnz;
-    A->row_ptr = row_ptr;
-    A->col_idx = col_idx;
-    A->values = values;
-    return A;
-}
-
-static void csr_destroy(CSR *A)
-{
-    if (!A)
-        return;
-    free(A->row_ptr);
-    free(A->col_idx);
-    free(A->values);
-    free(A);
-}
-
 typedef struct
 {
-    size_t N, m, n, nnz;
-    double density;
-    double pi_wall, eig_wall;
-    double pi_cpu, eig_cpu;
-    double pi_gflops, eig_gflops;
-    double max_err, l2;
-} Row;
+    double avg, std, best;
+} Stats;
+
+static Stats summarize(const std::vector<double> &v)
+{
+    if (v.empty())
+        return {0, 0, 0};
+    double sum = 0.0, sum2 = 0.0, best = v[0];
+    for (double x : v)
+    {
+        sum += x;
+        sum2 += x * x;
+        if (x < best)
+            best = x;
+    }
+    double n = (double)v.size();
+    double avg = sum / n;
+    double var = fmax(0.0, sum2 / n - avg * avg);
+    return {avg, sqrt(var), best};
+}
 
 int main(int argc, char **argv)
 {
-    const size_t Ns[] = {512, 1024, 2048, 4096};
-    const size_t n_scales = sizeof(Ns) / sizeof(Ns[0]);
-    double density = 0.01;
-    if (argc >= 2)
-        density = atof(argv[1]);
-    Row rows[n_scales];
-    for (size_t t = 0; t < n_scales; t++)
+    if (argc < 2)
     {
-        size_t N = Ns[t];
-        size_t m = N, n = N;
-        uint64_t seed = 1;
-        CSR *A = csr_random(m, n, density, &seed);
-        size_t nnz = A->nnz;
-        double *x = (double *)xalloc(n * sizeof(double));
-        double *y1 = (double *)xalloc(m * sizeof(double));
-        double *y2 = (double *)xalloc(m * sizeof(double));
-        fill(x, n, &seed);
-        for (size_t i = 0; i < m; ++i)
-        {
-            y1[i] = 0.0;
-            y2[i] = 0.0;
-        }
-        typedef Eigen::Triplet<double, int> T;
-        std::vector<T> trips;
-        trips.reserve((size_t)(nnz));
-        for (size_t i = 0; i < m; ++i)
-        {
-            for (size_t j = A->row_ptr[i]; j < A->row_ptr[i + 1]; ++j)
-            {
-                trips.emplace_back((int)i, (int)A->col_idx[j], A->values[j]);
-            }
-        }
-        Eigen::SparseMatrix<double, Eigen::RowMajor, int> Ae((int)m, (int)n);
-        Ae.setFromTriplets(trips.begin(), trips.end());
-        double w0 = wall_now_gettimeofday();
-        double c0 = cpu_now_clock();
-        piSpMV(A, x, y1, n, m);
-        double c1 = cpu_now_clock();
-        double w1 = wall_now_gettimeofday();
-        Eigen::Map<const Eigen::VectorXd> X(x, (Eigen::Index)n);
-        Eigen::Map<Eigen::VectorXd> Y2(y2, (Eigen::Index)m);
-        double w2 = wall_now_gettimeofday();
-        double c2 = cpu_now_clock();
-        Y2 = Ae * X;
-        double c3 = cpu_now_clock();
-        double w3 = wall_now_gettimeofday();
-        double max_err = 0.0, l2 = 0.0;
-        for (size_t i = 0; i < m; i++)
-        {
-            double d = fabs(y1[i] - y2[i]);
-            if (d > max_err)
-                max_err = d;
-            l2 += d * d;
-        }
-        l2 = sqrt(l2);
-        double ops = 2.0 * (double)nnz;
-        double pi_wall = w1 - w0, eig_wall = w3 - w2;
-        double pi_cpu = c1 - c0, eig_cpu = c3 - c2;
-        double gflops_pi = (ops / pi_wall) * 1e-9;
-        double gflops_eig = (ops / eig_wall) * 1e-9;
-        rows[t] = (Row){N, m, n, nnz, density, pi_wall, eig_wall, pi_cpu, eig_cpu, gflops_pi, gflops_eig, max_err, l2};
-        csr_destroy(A);
+        fprintf(stderr, "用法: %s <matrix.bin> [warmup=2] [iters=10] [cycles=3]\n", argv[0]);
+        return 1;
+    }
+
+    const char *bin_path = argv[1];
+    int warmup = (argc >= 3) ? atoi(argv[2]) : 2;
+    int iters = (argc >= 4) ? atoi(argv[3]) : 10;
+    int cycles = (argc >= 5) ? atoi(argv[4]) : 3;
+
+    pi_csr A;
+    piState st = csr_from_bin(bin_path, &A);
+    if (st != piSuccess)
+    {
+        fprintf(stderr, "csr_from_bin 读取失败: %s\n", bin_path);
+        return 1;
+    }
+    size_t m = A.n_rows;
+    size_t n = A.n_cols;
+    size_t nnz = A.nnz;
+    printf("已加载矩阵: %zu x %zu, nnz = %zu\n", m, n, nnz);
+
+    double *x = (double *)xalloc(n * sizeof(double));
+    double *y1 = (double *)xalloc(m * sizeof(double)); // piSpMV 输出
+    double *y2 = (double *)xalloc(m * sizeof(double)); // MKL SpMV 输出
+
+    srand(1);
+    for (size_t i = 0; i < n; ++i)
+        x[i] = ((double)(rand()) / RAND_MAX) * 2.0 - 1.0;
+
+    // ======== 构造 MKL CSR 矩阵 ========
+    MKL_INT m_mkl = (MKL_INT)m;
+    MKL_INT n_mkl = (MKL_INT)n;
+
+    std::vector<MKL_INT> mkl_row_ptr(m + 1);
+    std::vector<MKL_INT> mkl_col_idx(nnz);
+    std::vector<double> mkl_values(nnz);
+
+    for (size_t i = 0; i <= m; ++i)
+        mkl_row_ptr[i] = (MKL_INT)A.row_ptr[i];
+    for (size_t j = 0; j < nnz; ++j)
+    {
+        mkl_col_idx[j] = (MKL_INT)A.col_idx[j];
+        mkl_values[j] = A.values[j];
+    }
+
+    sparse_matrix_t Amkl;
+    sparse_status_t status = mkl_sparse_d_create_csr(
+        &Amkl,
+        SPARSE_INDEX_BASE_ZERO,
+        m_mkl,
+        n_mkl,
+        mkl_row_ptr.data(),
+        mkl_row_ptr.data() + 1,
+        mkl_col_idx.data(),
+        mkl_values.data());
+
+    if (status != SPARSE_STATUS_SUCCESS)
+    {
+        fprintf(stderr, "mkl_sparse_d_create_csr 失败, status = %d\n", status);
+        csr_destroy(&A);
         free(x);
         free(y1);
         free(y2);
+        return 1;
     }
-    printf("%6s %8s %8s %10s %12s %12s %12s %12s %12s %12s %12s\n",
-           "N", "m", "n", "nnz", "density",
-           "pi_wall", "eig_wall", "pi_cpu", "eig_cpu", "pi_GF/s", "eig_GF/s");
-    for (size_t i = 0; i < n_scales; i++)
+
+    struct matrix_descr descr;
+    descr.type = SPARSE_MATRIX_TYPE_GENERAL;
+
+    mkl_sparse_optimize(Amkl);
+
+    // ======== 先做一次正确性验证 ========
+    memset(y1, 0, m * sizeof(double));
+    memset(y2, 0, m * sizeof(double));
+
+    piSpMV(&A, x, y1);
+
+    status = mkl_sparse_d_mv(
+        SPARSE_OPERATION_NON_TRANSPOSE,
+        1.0,
+        Amkl,
+        descr,
+        x,
+        0.0,
+        y2);
+
+    if (status != SPARSE_STATUS_SUCCESS)
     {
-        printf("%6zu %8zu %8zu %10zu %12.4f %12.6f %12.6f %12.6f %12.6f %12.3f %12.3f   max_err=%8.2e  l2=%8.2e\n",
-               rows[i].N, rows[i].m, rows[i].n, rows[i].nnz, rows[i].density,
-               rows[i].pi_wall, rows[i].eig_wall, rows[i].pi_cpu, rows[i].eig_cpu,
-               rows[i].pi_gflops, rows[i].eig_gflops, rows[i].max_err, rows[i].l2);
+        fprintf(stderr, "mkl_sparse_d_mv 失败, status = %d\n", status);
+        mkl_sparse_destroy(Amkl);
+        csr_destroy(&A);
+        free(x);
+        free(y1);
+        free(y2);
+        return 1;
     }
+
+    double max_err = 0.0, l2 = 0.0;
+    for (size_t i = 0; i < m; ++i)
+    {
+        double d = fabs(y1[i] - y2[i]);
+        if (d > max_err)
+            max_err = d;
+        l2 += d * d;
+    }
+    l2 = sqrt(l2);
+    printf("结果验证: max_err = %.3e, l2 = %.3e\n", max_err, l2);
+
+    const double ops = 2.0 * (double)nnz;
+
+    // ======== warmup ========
+    for (int k = 0; k < warmup; ++k)
+    {
+        piSpMV(&A, x, y1);
+        mkl_sparse_d_mv(
+            SPARSE_OPERATION_NON_TRANSPOSE,
+            1.0,
+            Amkl,
+            descr,
+            x,
+            0.0,
+            y2);
+    }
+
+    std::vector<double> pi_cycle_avg, mkl_cycle_avg;
+    std::vector<double> pi_all, mkl_all;
+
+    // ======== 正式计时 ========
+    for (int c = 0; c < cycles; ++c)
+    {
+        double sum_pi = 0.0;
+        double sum_mkl = 0.0;
+
+        for (int it = 0; it < iters; ++it)
+        {
+            double t0 = wall_now_gettimeofday();
+            piSpMV(&A, x, y1);
+            double t1 = wall_now_gettimeofday();
+            sum_pi += (t1 - t0);
+            pi_all.push_back(t1 - t0);
+
+            double t2 = wall_now_gettimeofday();
+            mkl_sparse_d_mv(
+                SPARSE_OPERATION_NON_TRANSPOSE,
+                1.0,
+                Amkl,
+                descr,
+                x,
+                0.0,
+                y2);
+            double t3 = wall_now_gettimeofday();
+            sum_mkl += (t3 - t2);
+            mkl_all.push_back(t3 - t2);
+        }
+
+        pi_cycle_avg.push_back(sum_pi / iters);
+        mkl_cycle_avg.push_back(sum_mkl / iters);
+    }
+
+    Stats s_pi = summarize(pi_cycle_avg);
+    Stats s_mkl = summarize(mkl_cycle_avg);
+    Stats s_pi_all = summarize(pi_all);
+    Stats s_mkl_all = summarize(mkl_all);
+
+    double gflops_pi_avg = (ops / s_pi.avg) * 1e-9;
+    double gflops_mkl_avg = (ops / s_mkl.avg) * 1e-9;
+    double gflops_pi_best = (ops / s_pi_all.best) * 1e-9;
+    double gflops_mkl_best = (ops / s_mkl_all.best) * 1e-9;
+
+    printf("测试配置: warmup=%d iters/周期=%d cycles=%d\n", warmup, iters, cycles);
+    printf("PI:   平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
+           s_pi.avg, s_pi.std, s_pi_all.best, gflops_pi_avg, gflops_pi_best);
+    printf("MKL:  平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
+           s_mkl.avg, s_mkl.std, s_mkl_all.best, gflops_mkl_avg, gflops_mkl_best);
+
+    mkl_sparse_destroy(Amkl);
+    free(x);
+    free(y1);
+    free(y2);
+    csr_destroy(&A);
     return 0;
 }
