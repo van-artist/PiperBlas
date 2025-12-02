@@ -98,10 +98,10 @@ if(PIPER_BUILD_TESTS)
             $<$<BOOL:${PIPER_ENABLE_CUDA}>:${CUDAToolkit_INCLUDE_DIRS}>
         )
 
-        # BLAS/MKL 仅在需要的测试中链接，避免把纯主机库传给 nvlink
         if(test_name STREQUAL "test_gemm")
             target_link_libraries(${test_name} PRIVATE BLAS::BLAS)
         endif()
+
         if(test_name STREQUAL "test_spmv")
             target_include_directories(${test_name} PRIVATE "${MKL_INCLUDE_DIR}")
             target_link_directories(${test_name} PRIVATE "${MKL_LIBRARY_DIR}")
@@ -109,14 +109,13 @@ if(PIPER_BUILD_TESTS)
         endif()
 
         target_link_libraries(${test_name} PRIVATE piperDNN)
+
         if(PIPER_ENABLE_CUDA AND TARGET pipercuda)
-            # 只有真正用到 CUDA 的测试才链接 pipercuda，避免无意义的 device link
-            if(test_src MATCHES "\\.cu$" OR test_name STREQUAL "test_axpy")
-                target_link_libraries(${test_name} PRIVATE pipercuda CUDA::cudart CUDA::cublas)
-                set_target_properties(${test_name} PROPERTIES
-                    CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-                )
-            endif()
+            target_link_libraries(${test_name} PRIVATE
+                pipercuda
+                CUDA::cudart
+                CUDA::cublas
+            )
         endif()
     endforeach()
 endif()
