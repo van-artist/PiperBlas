@@ -2,3 +2,5 @@
 build/
 report/
 data/
+logs/
+.vs/
