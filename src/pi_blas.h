@@ -6,3 +6,8 @@ piState piGemm(double *A, double *B, double *C, double alpha, double beta, size_
 piState piGemm_v2(double *A, double *B, double *C,
                   double alpha, double beta,
                   size_t m, size_t k, size_t n);
+piState piGemm_v3(double *A,
+                  double *B,
+                  double *C,
+                  double alpha, double beta,
+                  size_t m, size_t k, size_t n);
