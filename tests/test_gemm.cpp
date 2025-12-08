@@ -183,10 +183,30 @@ piState my_cuda_gemm<double>(int m, int k, int n,
 }
 
 template <typename T>
+static piState my_cuda_gemm_v2(int m, int k, int n,
+                               T *dA, T *dB, T *dC,
+                               T alpha, T beta);
+
+template <>
+piState my_cuda_gemm_v2<float>(int m, int k, int n,
+                               float *dA, float *dB, float *dC,
+                               float alpha, float beta)
+{
+    return piCudaGemmFp32_v2(dA, dB, dC, alpha, beta, m, k, n);
+}
+
+template <>
+piState my_cuda_gemm_v2<double>(int m, int k, int n,
+                                double *dA, double *dB, double *dC,
+                                double alpha, double beta)
+{
+    return piCudaGemmFp64_v2(dA, dB, dC, alpha, beta, m, k, n);
+}
+
+template <typename T>
 static void run_precision(cublasHandle_t handle)
 {
     const size_t Ns[] = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
-    // const size_t Ns[] = {64, 128, 256, 512, 1024};
     const size_t n_scales = sizeof(Ns) / sizeof(Ns[0]);
     const T alpha = static_cast<T>(1.2);
     const T beta = static_cast<T>(0.8);
@@ -196,19 +216,29 @@ static void run_precision(cublasHandle_t handle)
         size_t N;
         size_t elems;
 
-        double cpu_wall[3];
-        double cpu_gflops[3];
-        double cpu_max_err[3];
-        double cpu_l2[3];
+        // CPU: 只保留 v2 / v3
+        double cpu_wall[2];
+        double cpu_gflops[2];
+        double cpu_max_err[2];
+        double cpu_l2[2];
 
+        // 自己的 CUDA 实现 v1
         double mycu_wall;
         double mycu_gflops;
         double mycu_max_err;
         double mycu_l2;
 
+        // 自己的 CUDA 实现 v2
+        double mycu_v2_wall;
+        double mycu_v2_gflops;
+        double mycu_v2_max_err;
+        double mycu_v2_l2;
+
+        // host BLAS
         double blas_wall;
         double blas_gflops;
 
+        // cuBLAS
         double cu_wall;
         double cu_gflops;
         double cu_max_err;
@@ -217,13 +247,10 @@ static void run_precision(cublasHandle_t handle)
 
     std::vector<Row> rows(n_scales);
 
-    // 这里假设你有：
-    // double 版: piGemmFp64 / v2 / v3
-    // float 版:  piGemmFp32 / v2 / v3
+    // CPU 版本：只保留 v2 / v3
     using PiFunc = piState (*)(T *, T *, T *, T, T, size_t, size_t, size_t);
 
-    PiFunc funcs[3] = {
-        std::is_same<T, double>::value ? (PiFunc)piGemmFp64 : (PiFunc)piGemmFp32,
+    PiFunc funcs[2] = {
         std::is_same<T, double>::value ? (PiFunc)piGemmFp64_v2 : (PiFunc)piGemmFp32_v2,
         std::is_same<T, double>::value ? (PiFunc)piGemmFp64_v3 : (PiFunc)piGemmFp32_v3};
 
@@ -248,8 +275,10 @@ static void run_precision(cublasHandle_t handle)
         for (size_t i = 0; i < csz; ++i)
             Cblas[i] = Cref[i];
 
+        // host BLAS 作为参考
         double w0 = wall_now();
         double c0 = cpu_now();
+        (void)c0;
         host_blas_gemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                        (int)m, (int)n, (int)k,
                        alpha,
@@ -258,18 +287,23 @@ static void run_precision(cublasHandle_t handle)
                        beta,
                        Cblas, (int)n);
         double c1 = cpu_now();
+        (void)c1;
         double w1 = wall_now();
 
         double blas_wall = w1 - w0;
         double ops = 2.0 * (double)m * (double)k * (double)n;
         double blas_gflops = ops / blas_wall * 1e-9;
 
+        // GPU 结果缓冲
         T *Ccu = (T *)xalloc(csz * sizeof(T));
         T *Cmy = (T *)xalloc(csz * sizeof(T));
+        T *Cmy2 = (T *)xalloc(csz * sizeof(T));
+
         for (size_t i = 0; i < csz; ++i)
         {
             Ccu[i] = Cref[i];
             Cmy[i] = Cref[i];
+            Cmy2[i] = Cref[i];
         }
 
         T *dA = nullptr;
@@ -283,6 +317,7 @@ static void run_precision(cublasHandle_t handle)
         CHECK_CUDA(cudaMemcpy(dB, B, bsz * sizeof(T), cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(dC, Ccu, csz * sizeof(T), cudaMemcpyHostToDevice));
 
+        // cuBLAS
         double w2 = wall_now();
         device_blas_gemm(handle,
                          CUBLAS_OP_N, CUBLAS_OP_N,
@@ -310,6 +345,7 @@ static void run_precision(cublasHandle_t handle)
         }
         cu_l2 = sqrt(cu_l2);
 
+        // 自己的 CUDA 实现 v1
         CHECK_CUDA(cudaMemcpy(dC, Cmy, csz * sizeof(T), cudaMemcpyHostToDevice));
 
         double w4 = wall_now();
@@ -333,6 +369,30 @@ static void run_precision(cublasHandle_t handle)
         }
         mycu_l2 = sqrt(mycu_l2);
 
+        // 自己的 CUDA 实现 v2
+        CHECK_CUDA(cudaMemcpy(dC, Cmy2, csz * sizeof(T), cudaMemcpyHostToDevice));
+
+        double w6 = wall_now();
+        piState st2 = my_cuda_gemm_v2<T>((int)m, (int)k, (int)n, dA, dB, dC, alpha, beta);
+        (void)st2;
+        CHECK_CUDA(cudaDeviceSynchronize());
+        double w7 = wall_now();
+
+        CHECK_CUDA(cudaMemcpy(Cmy2, dC, csz * sizeof(T), cudaMemcpyDeviceToHost));
+
+        double mycu_v2_wall = w7 - w6;
+        double mycu_v2_gflops = ops / mycu_v2_wall * 1e-9;
+
+        double mycu_v2_max_err = 0.0, mycu_v2_l2 = 0.0;
+        for (size_t i = 0; i < csz; ++i)
+        {
+            double d = (double)Cmy2[i] - (double)Cblas[i];
+            if (fabs(d) > mycu_v2_max_err)
+                mycu_v2_max_err = fabs(d);
+            mycu_v2_l2 += d * d;
+        }
+        mycu_v2_l2 = sqrt(mycu_v2_l2);
+
         Row row{};
         row.N = N;
         row.elems = csz;
@@ -346,8 +406,13 @@ static void run_precision(cublasHandle_t handle)
         row.mycu_gflops = mycu_gflops;
         row.mycu_max_err = mycu_max_err;
         row.mycu_l2 = mycu_l2;
+        row.mycu_v2_wall = mycu_v2_wall;
+        row.mycu_v2_gflops = mycu_v2_gflops;
+        row.mycu_v2_max_err = mycu_v2_max_err;
+        row.mycu_v2_l2 = mycu_v2_l2;
 
-        for (int v = 0; v < 3; ++v)
+        // CPU v2 / v3
+        for (int v = 0; v < 2; ++v)
         {
             T *C = (T *)xalloc(csz * sizeof(T));
             for (size_t i = 0; i < csz; ++i)
@@ -382,28 +447,33 @@ static void run_precision(cublasHandle_t handle)
         free(Cblas);
         free(Ccu);
         free(Cmy);
+        free(Cmy2);
         cudaFree(dA);
         cudaFree(dB);
         cudaFree(dC);
     }
 
     printf("==== %s ====\n", precision_name<T>());
-    printf("%8s %8s | %10s %10s %10s %10s | %10s %10s | %10s %10s %10s %10s %10s\n",
+    printf("%8s %8s | %10s %10s %10s %10s %10s %10s | %10s %10s %10s %10s %10s\n",
            "N", "elems",
-           "v1_GF/s", "v2_GF/s", "v3_GF/s", "cuda_GF/s",
+           "v2_GF/s", "v3_GF/s",
+           "myCU1_GF/s", "myCU2_GF/s",
            "blas_GF/s", "cuBlas_GF/s",
-           "v1_err", "v2_err", "v3_err", "myCUDA_err", "cuBlas_err");
+           "v2_err", "v3_err",
+           "myCU1_err", "myCU2_err", "cuBlas_err");
 
     for (size_t i = 0; i < rows.size(); ++i)
     {
         const Row &r = rows[i];
-        printf("%8zu %8zu | %10.3f %10.3f %10.3f %10.3f | %10.3f %10.3f | "
+        printf("%8zu %8zu | %10.3f %10.3f %10.3f %10.3f %10.3f %10.3f | "
                "%10.3e %10.3e %10.3e %10.3e %10.3e\n",
                r.N, r.elems,
-               r.cpu_gflops[0], r.cpu_gflops[1], r.cpu_gflops[2], r.mycu_gflops,
-               r.blas_gflops, r.cu_gflops,
-               r.cpu_max_err[0], r.cpu_max_err[1], r.cpu_max_err[2],
-               r.mycu_max_err, r.cu_max_err);
+               r.cpu_gflops[0], r.cpu_gflops[1],   // v2, v3
+               r.mycu_gflops, r.mycu_v2_gflops,    // myCUDA v1, v2
+               r.blas_gflops, r.cu_gflops,         // host BLAS, cuBLAS
+               r.cpu_max_err[0], r.cpu_max_err[1], // v2, v3 err
+               r.mycu_max_err, r.mycu_v2_max_err,  // myCUDA v1, v2 err
+               r.cu_max_err);                      // cuBLAS err
     }
 }
 

@@ -18,7 +18,7 @@ __global__ void gemm_kernel(int M, int K, int N, T *__restrict__ A, T *__restric
         T *C_row = C + row_index * N;
         T *A_row = A + row_index * K;
         T acc = 0;
-#pragma unroll
+        // #pragma unroll
         for (int k = 0; k < K; k++)
         {
             acc += B[k * N + col_index] * A_row[k];
@@ -36,9 +36,9 @@ __global__ void gemm_kernel_v2(int M, int K, int N, T *__restrict__ A, T *__rest
     // 总体ijk循环
     // 利用共享内存加速存储
 
-    constexpr int Mt = 32; // M方向的块长度
-    constexpr int Kt = 32; // K方向的块长度
-    constexpr int Nt = 32; // N方向的块长度
+    constexpr int Mt = 16; // M方向的块长度
+    constexpr int Kt = 16; // K方向的块长度
+    constexpr int Nt = 16; // N方向的块长度
 
     // shared memory
     __shared__ T A_tile[Mt][Kt];
@@ -130,8 +130,8 @@ template <typename T>
 piState gemm_cuda_impl_v2(int M, int K, int N, T *__restrict__ A, T *__restrict__ B, T *__restrict__ C, T alpha, T beta)
 {
     // C=αAB+βC
-    constexpr int BM = 32;
-    constexpr int BN = 32;
+    constexpr int BM = 16;
+    constexpr int BN = 16;
 
     dim3 block(BN, BM);
     dim3 grid(

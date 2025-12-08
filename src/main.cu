@@ -7,41 +7,61 @@
 #include "utils.h"
 #include "cuda/cuda_kernels.h"
 
-__global__ void helloFromGPU()
-{
-    printf("Hello from GPU!\n");
-}
 int main()
 {
-    helloFromGPU<<<1, 1>>>();
-    cudaDeviceSynchronize();
-    print_cuda_important_attrs(0);
-    int m = 2;
-    int k = 2;
-    int n = 2;
-    float hostA[] = {1.f, 2.f, 3.f, 4.f};
-    float hostB[] = {5.f, 6.f, 7.f, 8.f};
-    float hostC[] = {1.f, 1.f, 1.f, 1.f};
+    // 8192 x 8192 GEMM: C = alpha * A * B + beta * C
+    int m = 8192;
+    int k = 8192;
+    int n = 8192;
+
+    size_t sizeA = static_cast<size_t>(m) * k;
+    size_t sizeB = static_cast<size_t>(k) * n;
+    size_t sizeC = static_cast<size_t>(m) * n;
+
+    float *hostA = (float *)malloc(sizeA * sizeof(float));
+    float *hostB = (float *)malloc(sizeB * sizeof(float));
+    float *hostC = (float *)malloc(sizeC * sizeof(float));
+
+    // 简单初始化一下数据
+    for (size_t i = 0; i < sizeA; ++i)
+        hostA[i] = 1.0f;
+    for (size_t i = 0; i < sizeB; ++i)
+        hostB[i] = 1.0f;
+    for (size_t i = 0; i < sizeC; ++i)
+        hostC[i] = 0.0f;
+
     float *dA = nullptr;
     float *dB = nullptr;
     float *dC = nullptr;
-    CHECK_CUDA(cudaMalloc(&dA, sizeof(hostA)));
-    CHECK_CUDA(cudaMalloc(&dB, sizeof(hostB)));
-    CHECK_CUDA(cudaMalloc(&dC, sizeof(hostC)));
-    CHECK_CUDA(cudaMemcpy(dA, hostA, sizeof(hostA), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(dB, hostB, sizeof(hostB), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(dC, hostC, sizeof(hostC), cudaMemcpyHostToDevice));
-    piState state = piCudaGemmFp32_v2(dA, dB, dC, 1.0f, 2.0f, m, k, n);
+
+    CHECK_CUDA(cudaMalloc(&dA, sizeA * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&dB, sizeB * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&dC, sizeC * sizeof(float)));
+
+    CHECK_CUDA(cudaMemcpy(dA, hostA, sizeA * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(dB, hostB, sizeB * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(dC, hostC, sizeC * sizeof(float), cudaMemcpyHostToDevice));
+
+    float alpha = 1.0f;
+    float beta = 0.0f;
+    piState state = piCudaGemmFp32_v2(dA, dB, dC, alpha, beta, m, k, n);
+
     CHECK_CUDA(cudaDeviceSynchronize());
-    CHECK_CUDA(cudaMemcpy(hostC, dC, sizeof(hostC), cudaMemcpyDeviceToHost));
+
+    CHECK_CUDA(cudaMemcpy(hostC, dC, 16 * sizeof(float), cudaMemcpyDeviceToHost));
     std::cout << "gemm state: " << state << std::endl;
-    for (int i = 0; i < m * n; ++i)
+    for (int i = 0; i < 16; ++i)
     {
-        std::cout << hostC[i] << (i + 1 == m * n ? '\n' : ' ');
+        std::cout << hostC[i] << (i + 1 == 16 ? '\n' : ' ');
     }
 
     cudaFree(dA);
     cudaFree(dB);
     cudaFree(dC);
+
+    free(hostA);
+    free(hostB);
+    free(hostC);
+
     return 0;
 }
