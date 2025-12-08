@@ -161,14 +161,6 @@ const char *precision_name<double>()
     return "fp64";
 }
 
-// 你的 CUDA GEMM 声明（新的签名）
-piState gemm_fp32(float *A, float *B, float *C,
-                  float alpha, float beta,
-                  int m, int k, int n);
-piState gemm_fp64(double *A, double *B, double *C,
-                  double alpha, double beta,
-                  int m, int k, int n);
-
 template <typename T>
 static piState my_cuda_gemm(int m, int k, int n,
                             T *dA, T *dB, T *dC,
@@ -179,8 +171,7 @@ piState my_cuda_gemm<float>(int m, int k, int n,
                             float *dA, float *dB, float *dC,
                             float alpha, float beta)
 {
-    // 新签名：A,B,C,alpha,beta,m,k,n
-    return gemm_fp32(dA, dB, dC, alpha, beta, m, k, n);
+    return piCudaGemmFp32(dA, dB, dC, alpha, beta, m, k, n);
 }
 
 template <>
@@ -188,13 +179,14 @@ piState my_cuda_gemm<double>(int m, int k, int n,
                              double *dA, double *dB, double *dC,
                              double alpha, double beta)
 {
-    return gemm_fp64(dA, dB, dC, alpha, beta, m, k, n);
+    return piCudaGemmFp64(dA, dB, dC, alpha, beta, m, k, n);
 }
 
 template <typename T>
 static void run_precision(cublasHandle_t handle)
 {
     const size_t Ns[] = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
+    // const size_t Ns[] = {64, 128, 256, 512, 1024};
     const size_t n_scales = sizeof(Ns) / sizeof(Ns[0]);
     const T alpha = static_cast<T>(1.2);
     const T beta = static_cast<T>(0.8);
@@ -399,8 +391,8 @@ static void run_precision(cublasHandle_t handle)
     printf("%8s %8s | %10s %10s %10s %10s | %10s %10s | %10s %10s %10s %10s %10s\n",
            "N", "elems",
            "v1_GF/s", "v2_GF/s", "v3_GF/s", "cuda_GF/s",
-           "blas_GF/s", "cu_GF/s",
-           "v1_err", "v2_err", "v3_err", "myCUDA_err", "cu_err");
+           "blas_GF/s", "cuBlas_GF/s",
+           "v1_err", "v2_err", "v3_err", "myCUDA_err", "cuBlas_err");
 
     for (size_t i = 0; i < rows.size(); ++i)
     {

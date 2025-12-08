@@ -3,5 +3,27 @@
 #include "pi_type.h"
 
 piState axpy(int n, float alpha, const float *__restrict__ x, float *__restrict__ y);
-piState gemm_fp32(float *A, float *B, float *C, float alpha, float beta, int m, int k, int n);
-piState gemm_fp64(double *A, double *B, double *C, double alpha, double beta, int m, int k, int n);
+piState piCudaGemmFp32(float *__restrict__ A,
+                       float *__restrict__ B,
+                       float *__restrict__ C,
+                       float alpha,
+                       float beta,
+                       int M, int K, int N);
+piState piCudaGemmFp64(double *__restrict__ A,
+                       double *__restrict__ B,
+                       double *__restrict__ C,
+                       double alpha,
+                       double beta,
+                       int M, int K, int N);
+piState piCudaGemmFp32_v2(float *__restrict__ A,
+                          float *__restrict__ B,
+                          float *__restrict__ C,
+                          float alpha,
+                          float beta,
+                          int M, int K, int N);
+piState piCudaGemmFp64_v2(double *__restrict__ A,
+                          double *__restrict__ B,
+                          double *__restrict__ C,
+                          double alpha,
+                          double beta,
+                          int M, int K, int N);
