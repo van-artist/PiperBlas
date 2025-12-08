@@ -2,7 +2,28 @@
 #include <cuda_runtime.h>
 #include "pi_type.h"
 
-__global__ void axpy_kernel(int n, float alpha, const float *x, float *y);
-__global__ void gemm_kernel(int m, int k, int n, const float *A, const float *B, float *C, const float alpha, const float beta);
 piState axpy(int n, float alpha, const float *__restrict__ x, float *__restrict__ y);
-piState gemm(int m, int k, int n, const float *A, const float *B, float *C, const float alpha, const float beta);
+piState piCudaGemmFp32(float *__restrict__ A,
+                       float *__restrict__ B,
+                       float *__restrict__ C,
+                       float alpha,
+                       float beta,
+                       int M, int K, int N);
+piState piCudaGemmFp64(double *__restrict__ A,
+                       double *__restrict__ B,
+                       double *__restrict__ C,
+                       double alpha,
+                       double beta,
+                       int M, int K, int N);
+piState piCudaGemmFp32_v2(float *__restrict__ A,
+                          float *__restrict__ B,
+                          float *__restrict__ C,
+                          float alpha,
+                          float beta,
+                          int M, int K, int N);
+piState piCudaGemmFp64_v2(double *__restrict__ A,
+                          double *__restrict__ B,
+                          double *__restrict__ C,
+                          double alpha,
+                          double beta,
+                          int M, int K, int N);
