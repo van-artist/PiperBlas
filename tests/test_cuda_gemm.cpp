@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <math.h>
 #include <vector>
+#include <string>
+#include <string.h>
 
 #include "pi_blas.h"
 #include "pi_type.h"
@@ -162,8 +164,8 @@ static Result run_case(cublasHandle_t handle, size_t N)
     float *C = (float *)aligned_alloc64(csz * sizeof(float));
     const double ops = 2.0 * (double)m * (double)n * (double)k;
 
-    const int WARMUP = 5;
-    const int ITERS = 20;
+    const int WARMUP = 2;
+    const int ITERS = 3;
 
     Result out{};
     out.N = N;
@@ -232,48 +234,117 @@ static Result run_case(cublasHandle_t handle, size_t N)
     return out;
 }
 
-int main()
+enum ShowMask : int
+{
+    SHOW_ABS = 1 << 0,
+    SHOW_REL = 1 << 1,
+    SHOW_ERR = 1 << 2,
+};
+
+static int parse_show_mask(int argc, char **argv)
+{
+    int mask = SHOW_ABS | SHOW_REL;
+    for (int i = 1; i < argc; ++i)
+    {
+        const char *a = argv[i];
+        if (strncmp(a, "--show=", 7) == 0)
+        {
+            mask = 0;
+            std::string s(a + 7);
+            for (auto &c : s)
+                if (c == ',')
+                    c = '+';
+            if (s.find("abs") != std::string::npos)
+                mask |= SHOW_ABS;
+            if (s.find("rel") != std::string::npos)
+                mask |= SHOW_REL;
+            if (s.find("err") != std::string::npos)
+                mask |= SHOW_ERR;
+            if (mask == 0)
+                mask = SHOW_ABS | SHOW_REL;
+        }
+    }
+    return mask;
+}
+
+static bool use_rich_shapes(int argc, char **argv)
+{
+    for (int i = 1; i < argc; ++i)
+        if (strcmp(argv[i], "--rich") == 0)
+            return true;
+    return false;
+}
+
+static inline double rel_pct(double custom, double cublas)
+{
+    return cublas > 0.0 ? (custom / cublas) * 100.0 : 0.0;
+}
+
+int main(int argc, char **argv)
 {
     config_init();
+
+    int show = parse_show_mask(argc, argv);
+    bool rich = use_rich_shapes(argc, argv);
 
     cublasHandle_t handle;
     cublasCreate(&handle);
 
-    // const size_t Ns[] = {
-    //     64, 96, 128,
-    //     160, 192, 224, 256,
-    //     320, 384, 448, 512,
-    //     640, 768, 896, 1024,
-    //     1280, 1536, 1792, 2048,
-    //     2560, 3072, 3584, 4096,
-    //     5120, 6144, 7168, 8192};
-    const size_t Ns[] = {
-        64, 128, 256,
-        512,
-        1024,
-        2048,
-        4096,
-        8192};
-    const size_t n_scales = sizeof(Ns) / sizeof(Ns[0]);
+    std::vector<size_t> Ns;
+
+    if (!rich)
+    {
+        size_t def[] = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
+        Ns.assign(def, def + sizeof(def) / sizeof(def[0]));
+    }
+    else
+    {
+        size_t richN[] = {
+            32, 48, 64, 96,
+            128, 160, 192, 224, 256,
+            320, 384, 448, 512,
+            640, 768, 896, 1024,
+            1280, 1536, 1792, 2048,
+            2560, 3072, 3584, 4096,
+            5120, 6144, 7168, 8192};
+        Ns.assign(richN, richN + sizeof(richN) / sizeof(richN[0]));
+    }
 
     std::vector<Result> results;
-    results.reserve(n_scales);
-
-    for (size_t i = 0; i < n_scales; ++i)
-        results.push_back(run_case(handle, Ns[i]));
+    for (auto N : Ns)
+        results.push_back(run_case(handle, N));
 
     printf("==== CUDA fp32 ====\n");
-    printf("%8s | %10s %10s %10s %10s %10s | %10s %10s %10s %10s %10s\n",
-           "N",
-           "c1_GF/s", "c2_GF/s", "c3_GF/s", "c4_GF/s", "cu_GF/s",
-           "c1_err", "c2_err", "c3_err", "c4_err", "cu_err");
+
+    printf("%8s", "N");
+    if (show & SHOW_ABS)
+        printf(" | %10s %10s %10s %10s %10s", "c1_GF/s", "c2_GF/s", "c3_GF/s", "c4_GF/s", "cu_GF/s");
+    if (show & SHOW_REL)
+        printf(" | %10s %10s %10s %10s", "c1_%cu", "c2_%cu", "c3_%cu", "c4_%cu");
+    if (show & SHOW_ERR)
+        printf(" | %10s %10s %10s %10s %10s", "c1_err", "c2_err", "c3_err", "c4_err", "cu_err");
+    printf("\n");
 
     for (const auto &r : results)
     {
-        printf("%8zu | %10.3f %10.3f %10.3f %10.3f %10.3f | %10.3e %10.3e %10.3e %10.3e %10.3e\n",
-               r.N,
-               r.gflops_custom1, r.gflops_custom2, r.gflops_custom3, r.gflops_custom4, r.gflops_cublas,
-               r.err_custom1, r.err_custom2, r.err_custom3, r.err_custom4, r.err_cublas);
+        printf("%8zu", r.N);
+
+        if (show & SHOW_ABS)
+            printf(" | %10.3f %10.3f %10.3f %10.3f %10.3f",
+                   r.gflops_custom1, r.gflops_custom2, r.gflops_custom3, r.gflops_custom4, r.gflops_cublas);
+
+        if (show & SHOW_REL)
+            printf(" | %10.2f %10.2f %10.2f %10.2f",
+                   rel_pct(r.gflops_custom1, r.gflops_cublas),
+                   rel_pct(r.gflops_custom2, r.gflops_cublas),
+                   rel_pct(r.gflops_custom3, r.gflops_cublas),
+                   rel_pct(r.gflops_custom4, r.gflops_cublas));
+
+        if (show & SHOW_ERR)
+            printf(" | %10.3e %10.3e %10.3e %10.3e %10.3e",
+                   r.err_custom1, r.err_custom2, r.err_custom3, r.err_custom4, r.err_cublas);
+
+        printf("\n");
     }
 
     cublasDestroy(handle);

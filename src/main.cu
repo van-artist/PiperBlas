@@ -49,9 +49,9 @@ static float bench_gemm(const char *name,
 
 int main()
 {
-    int m = 8192;
-    int k = 8192;
-    int n = 8192;
+    int m = 4096;
+    int k = 4096;
+    int n = 4096;
 
     size_t sizeA = (size_t)m * k;
     size_t sizeB = (size_t)k * n;

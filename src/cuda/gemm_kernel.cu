@@ -231,7 +231,7 @@ __global__ void gemm_kernel_v3(int M, int K, int N,
 
     constexpr int BM = 32;                     // M方向的块长度
     constexpr int BK = 32;                     // K方向的块长度
-    constexpr int BN = 32;                     // N方向的块长度
+    constexpr int BN = 128;                    // N方向的块长度
     constexpr int TM = 4;                      // 每线程在M方向计算的元素个数
     constexpr int TN = 4;                      // 每线程在N方向计算的元素个数
     int c_tile_row = blockIdx.y;               // Ctile在所有分块中的行索引
@@ -344,7 +344,7 @@ piState piCudaGemmFp32_v3(float *__restrict__ A,
 {
     // C=αAB+βC
     constexpr int BM = 32;
-    constexpr int BN = 32;
+    constexpr int BN = 128;
     constexpr int TM = 4;
     constexpr int TN = 4;
 
@@ -353,5 +353,280 @@ piState piCudaGemmFp32_v3(float *__restrict__ A,
               (M + BM - 1) / BM);
 
     gemm_kernel_v3<<<grid, block>>>(M, K, N, A, B, C, alpha, beta);
+    return piSuccess;
+}
+
+template <int BM, int BK, int BN, int TM, int TN>
+__global__ void gemm_kernel_v4_fp32_fast(
+    int M, int K, int N,
+    const float *__restrict__ A,
+    const float *__restrict__ B,
+    float *__restrict__ C,
+    float alpha, float beta)
+{
+    static_assert(TN == 4, "float4 path requires TN == 4");
+
+    constexpr int BK_PAD = BK + 4;
+
+    int block_row = blockIdx.y * BM;
+    int block_col = blockIdx.x * BN;
+
+    int local_row = threadIdx.y;
+    int local_col = threadIdx.x;
+
+    int row_base = block_row + local_row * TM;
+    int col_base = block_col + local_col * TN;
+
+    __shared__ __align__(16) float A_tile[BM][BK_PAD];
+    __shared__ __align__(16) float4 B_tile[BK][BN / 4];
+
+    float acc[TM][TN];
+#pragma unroll
+    for (int i = 0; i < TM; ++i)
+#pragma unroll
+        for (int j = 0; j < TN; ++j)
+            acc[i][j] = 0.f;
+
+    int tid = local_row * blockDim.x + local_col;
+    int nthreads = blockDim.x * blockDim.y;
+
+    for (int k0 = 0; k0 < K; k0 += BK)
+    {
+        {
+            int idx = tid;
+            int r = idx / (BK / 4);
+            int c4 = (idx % (BK / 4)) * 4;
+
+            int a_row = block_row + r;
+            int a_col = k0 + c4;
+
+            float4 v4 = load_float4(&A[a_row * K + a_col]);
+            *reinterpret_cast<float4 *>(&A_tile[r][c4]) = v4;
+        }
+
+        for (int idx = tid; idx < BK * (BN / 4); idx += nthreads)
+        {
+            int r = idx / (BN / 4);
+            int c4 = (idx % (BN / 4)) * 4;
+
+            int b_row = k0 + r;
+            int b_col = block_col + c4;
+
+            B_tile[r][c4 / 4] = load_float4(&B[b_row * N + b_col]);
+        }
+
+        __syncthreads();
+
+#pragma unroll
+        for (int t = 0; t < BK; ++t)
+        {
+            float a[TM];
+#pragma unroll
+            for (int i = 0; i < TM; ++i)
+                a[i] = A_tile[local_row * TM + i][t];
+
+            float4 bv = B_tile[t][local_col];
+            float b[TN] = {bv.x, bv.y, bv.z, bv.w};
+
+#pragma unroll
+            for (int i = 0; i < TM; ++i)
+#pragma unroll
+                for (int j = 0; j < TN; ++j)
+                    acc[i][j] += a[i] * b[j];
+        }
+
+        __syncthreads();
+    }
+
+#pragma unroll
+    for (int i = 0; i < TM; ++i)
+    {
+        float *p = C + (row_base + i) * N + col_base;
+
+        float4 outv;
+        outv.x = acc[i][0] * alpha;
+        outv.y = acc[i][1] * alpha;
+        outv.z = acc[i][2] * alpha;
+        outv.w = acc[i][3] * alpha;
+
+        if (beta != 0.0f)
+        {
+            float4 cv = load_float4(p);
+            outv.x += beta * cv.x;
+            outv.y += beta * cv.y;
+            outv.z += beta * cv.z;
+            outv.w += beta * cv.w;
+        }
+        store_float4(p, outv);
+    }
+}
+template <int BM, int BK, int BN, int TM, int TN>
+__global__ void gemm_kernel_v4_fp32_safe(
+    int M, int K, int N,
+    const float *__restrict__ A,
+    const float *__restrict__ B,
+    float *__restrict__ C,
+    float alpha, float beta)
+{
+    static_assert(TN == 4, "float4 path requires TN == 4");
+
+    constexpr int BK_PAD = BK + 4;
+
+    int block_row = blockIdx.y * BM;
+    int block_col = blockIdx.x * BN;
+
+    int local_row = threadIdx.y;
+    int local_col = threadIdx.x;
+
+    int row_base = block_row + local_row * TM;
+    int col_base = block_col + local_col * TN;
+
+    __shared__ __align__(16) float A_tile[BM][BK_PAD];
+    __shared__ __align__(16) float4 B_tile[BK][BN / 4];
+
+    float acc[TM][TN];
+#pragma unroll
+    for (int i = 0; i < TM; ++i)
+#pragma unroll
+        for (int j = 0; j < TN; ++j)
+            acc[i][j] = 0.f;
+
+    int tid = local_row * blockDim.x + local_col;
+    int nthreads = blockDim.x * blockDim.y;
+
+    for (int k0 = 0; k0 < K; k0 += BK)
+    {
+        {
+            int idx = tid;
+            int r = idx / (BK / 4);
+            int c4 = (idx % (BK / 4)) * 4;
+
+            int a_row = block_row + r;
+            int a_col = k0 + c4;
+
+            float4 v4 = make_float4_0();
+            if (a_row < M)
+                v4 = load_float4_safe(&A[a_row * K + a_col], K - a_col);
+
+            *reinterpret_cast<float4 *>(&A_tile[r][c4]) = v4;
+        }
+
+        for (int idx = tid; idx < BK * (BN / 4); idx += nthreads)
+        {
+            int r = idx / (BN / 4);
+            int c4 = (idx % (BN / 4)) * 4;
+
+            int b_row = k0 + r;
+            int b_col = block_col + c4;
+
+            float4 v4 = make_float4_0();
+            if (b_row < K)
+                v4 = load_float4_safe(&B[b_row * N + b_col], N - b_col);
+
+            B_tile[r][c4 / 4] = v4;
+        }
+
+        __syncthreads();
+
+        int t_end = min(BK, K - k0);
+#pragma unroll
+        for (int t = 0; t < t_end; ++t)
+        {
+            float a[TM];
+#pragma unroll
+            for (int i = 0; i < TM; ++i)
+                a[i] = A_tile[local_row * TM + i][t];
+
+            float4 bv = B_tile[t][local_col];
+            float b[TN] = {bv.x, bv.y, bv.z, bv.w};
+
+#pragma unroll
+            for (int i = 0; i < TM; ++i)
+#pragma unroll
+                for (int j = 0; j < TN; ++j)
+                    acc[i][j] += a[i] * b[j];
+        }
+
+        __syncthreads();
+    }
+
+#pragma unroll
+    for (int i = 0; i < TM; ++i)
+    {
+        int row = row_base + i;
+        if (row >= M)
+            continue;
+
+        float *p = C + row * N + col_base;
+        int n_remain = N - col_base;
+        if (n_remain <= 0)
+            continue;
+
+        float4 outv;
+        outv.x = acc[i][0] * alpha;
+        outv.y = acc[i][1] * alpha;
+        outv.z = acc[i][2] * alpha;
+        outv.w = acc[i][3] * alpha;
+
+        if (beta != 0.0f)
+        {
+            float4 cv = load_float4_safe(p, n_remain);
+            outv.x += beta * cv.x;
+            outv.y += beta * cv.y;
+            outv.z += beta * cv.z;
+            outv.w += beta * cv.w;
+        }
+        store_float4_safe(p, outv, n_remain);
+    }
+}
+
+piState piCudaGemmFp32_v4(
+    float *__restrict__ A,
+    float *__restrict__ B,
+    float *__restrict__ C,
+    float alpha,
+    float beta,
+    int M, int K, int N)
+{
+    constexpr int BM = 32;
+    constexpr int BK = 32;
+    constexpr int BN = 128;
+    constexpr int TM = 4;
+    constexpr int TN = 4;
+
+    static_assert(BN % TN == 0, "BN must be divisible by TN");
+    static_assert(BM % TM == 0, "BM must be divisible by TM");
+
+    dim3 block(BN / TN, BM / TM);
+    dim3 grid(
+        (N + BN - 1) / BN,
+        (M + BM - 1) / BM);
+
+    bool full_tile =
+        (M % BM == 0) &&
+        (N % BN == 0) &&
+        (K % BK == 0);
+
+    bool vec_ok =
+        (TN == 4) &&
+        (K % 4 == 0) &&
+        (N % 4 == 0) &&
+        is_aligned_16(A) &&
+        is_aligned_16(B) &&
+        is_aligned_16(C);
+
+    if (full_tile && vec_ok)
+    {
+        gemm_kernel_v4_fp32_fast<
+            BM, BK, BN, TM, TN><<<grid, block>>>(
+            M, K, N, A, B, C, alpha, beta);
+    }
+    else
+    {
+        gemm_kernel_v4_fp32_safe<
+            BM, BK, BN, TM, TN><<<grid, block>>>(
+            M, K, N, A, B, C, alpha, beta);
+    }
+
     return piSuccess;
 }
