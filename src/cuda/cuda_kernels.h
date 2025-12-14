@@ -27,3 +27,15 @@ piState piCudaGemmFp64_v2(double *__restrict__ A,
                           double alpha,
                           double beta,
                           int M, int K, int N);
+piState piCudaGemmFp32_v3(float *__restrict__ A,
+                          float *__restrict__ B,
+                          float *__restrict__ C,
+                          float alpha,
+                          float beta,
+                          int M, int K, int N);
+piState piCudaGemmFp32_v4(float *__restrict__ A,
+                          float *__restrict__ B,
+                          float *__restrict__ C,
+                          float alpha,
+                          float beta,
+                          int M, int K, int N);
