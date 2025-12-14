@@ -43,20 +43,6 @@ static void fill_random(float *x, size_t n, uint64_t *seed)
     }
 }
 
-static void host_gemm_rowmajor(int m, int n, int k,
-                               float alpha,
-                               const float *A, int lda,
-                               const float *B, int ldb,
-                               float beta,
-                               float *C, int ldc)
-{
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                m, n, k,
-                alpha, A, lda,
-                B, ldb,
-                beta, C, ldc);
-}
-
 static void device_gemm_cublas_rowmajor(cublasHandle_t handle,
                                         int m, int n, int k,
                                         float alpha,
@@ -101,24 +87,10 @@ static float time_avg_ms(F launch, int warmup, int iters)
     return ms / (float)iters;
 }
 
-static double max_abs_error(const float *x, const float *ref, size_t n)
-{
-    double e = 0.0;
-    for (size_t i = 0; i < n; ++i)
-    {
-        double d = (double)x[i] - (double)ref[i];
-        double a = fabs(d);
-        if (a > e)
-            e = a;
-    }
-    return e;
-}
-
 struct Result
 {
     size_t N;
     double gflops_custom1, gflops_custom2, gflops_custom3, gflops_custom4, gflops_cublas;
-    double err_custom1, err_custom2, err_custom3, err_custom4, err_cublas;
 };
 
 static Result run_case(cublasHandle_t handle, size_t N)
@@ -129,28 +101,16 @@ static Result run_case(cublasHandle_t handle, size_t N)
     const size_t csz = (size_t)m * n;
 
     const float alpha = 1.2f;
-    const float beta_ref = 0.8f;
     const float beta_time = 0.0f;
 
     float *A = (float *)aligned_alloc64(asz * sizeof(float));
     float *B = (float *)aligned_alloc64(bsz * sizeof(float));
     float *C0 = (float *)aligned_alloc64(csz * sizeof(float));
-    float *Cref = (float *)aligned_alloc64(csz * sizeof(float));
 
     uint64_t seed = 1;
     fill_random(A, asz, &seed);
     fill_random(B, bsz, &seed);
     fill_random(C0, csz, &seed);
-
-    for (size_t i = 0; i < csz; ++i)
-        Cref[i] = C0[i];
-
-    host_gemm_rowmajor(m, n, k,
-                       alpha,
-                       A, k,
-                       B, n,
-                       beta_ref,
-                       Cref, n);
 
     float *dA = nullptr, *dB = nullptr, *dC = nullptr;
     CHECK_CUDA(cudaMalloc(&dA, asz * sizeof(float)));
@@ -160,9 +120,7 @@ static Result run_case(cublasHandle_t handle, size_t N)
     CHECK_CUDA(cudaMemcpy(dA, A, asz * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(dB, B, bsz * sizeof(float), cudaMemcpyHostToDevice));
 
-    float *C = (float *)aligned_alloc64(csz * sizeof(float));
     const double ops = 2.0 * (double)m * (double)n * (double)k;
-
     const int WARMUP = 2;
     const int ITERS = 3;
 
@@ -176,55 +134,31 @@ static Result run_case(cublasHandle_t handle, size_t N)
         gflops = ops / (ms * 1e-3) * 1e-9;
     };
 
-    auto check_only = [&](auto launch, double &err)
-    {
-        CHECK_CUDA(cudaMemcpy(dC, C0, csz * sizeof(float), cudaMemcpyHostToDevice));
-        launch();
-        CHECK_CUDA(cudaDeviceSynchronize());
-        CHECK_CUDA(cudaMemcpy(C, dC, csz * sizeof(float), cudaMemcpyDeviceToHost));
-        err = max_abs_error(C, Cref, csz);
-    };
-
+    // cuBLAS
     time_only([&]()
               { device_gemm_cublas_rowmajor(handle, m, n, k, alpha, dA, k, dB, n, beta_time, dC, n); },
               out.gflops_cublas);
-    check_only([&]()
-               { device_gemm_cublas_rowmajor(handle, m, n, k, alpha, dA, k, dB, n, beta_ref, dC, n); },
-               out.err_cublas);
 
+    // custom kernels (timing only)
     time_only([&]()
               { (void)piCudaGemmFp32(dA, dB, dC, alpha, beta_time, m, k, n); },
               out.gflops_custom1);
-    check_only([&]()
-               { (void)piCudaGemmFp32(dA, dB, dC, alpha, beta_ref, m, k, n); },
-               out.err_custom1);
 
     time_only([&]()
               { (void)piCudaGemmFp32_v2(dA, dB, dC, alpha, beta_time, m, k, n); },
               out.gflops_custom2);
-    check_only([&]()
-               { (void)piCudaGemmFp32_v2(dA, dB, dC, alpha, beta_ref, m, k, n); },
-               out.err_custom2);
 
     time_only([&]()
               { (void)piCudaGemmFp32_v3(dA, dB, dC, alpha, beta_time, m, k, n); },
               out.gflops_custom3);
-    check_only([&]()
-               { (void)piCudaGemmFp32_v3(dA, dB, dC, alpha, beta_ref, m, k, n); },
-               out.err_custom3);
 
     time_only([&]()
               { (void)piCudaGemmFp32_v4(dA, dB, dC, alpha, beta_time, m, k, n); },
               out.gflops_custom4);
-    check_only([&]()
-               { (void)piCudaGemmFp32_v4(dA, dB, dC, alpha, beta_ref, m, k, n); },
-               out.err_custom4);
 
     free(A);
     free(B);
     free(C0);
-    free(Cref);
-    free(C);
 
     cudaFree(dA);
     cudaFree(dB);
@@ -237,7 +171,6 @@ enum ShowMask : int
 {
     SHOW_ABS = 1 << 0,
     SHOW_REL = 1 << 1,
-    SHOW_ERR = 1 << 2,
 };
 
 static int parse_show_mask(int argc, char **argv)
@@ -257,8 +190,6 @@ static int parse_show_mask(int argc, char **argv)
                 mask |= SHOW_ABS;
             if (s.find("rel") != std::string::npos)
                 mask |= SHOW_REL;
-            if (s.find("err") != std::string::npos)
-                mask |= SHOW_ERR;
             if (mask == 0)
                 mask = SHOW_ABS | SHOW_REL;
         }
@@ -310,18 +241,17 @@ int main(int argc, char **argv)
     }
 
     std::vector<Result> results;
+    results.reserve(Ns.size());
     for (auto N : Ns)
         results.push_back(run_case(handle, N));
 
-    printf("==== CUDA fp32 ====\n");
+    printf("==== CUDA fp32 (timing only) ====\n");
 
     printf("%8s", "N");
     if (show & SHOW_ABS)
         printf(" | %10s %10s %10s %10s %10s", "c1_GF/s", "c2_GF/s", "c3_GF/s", "c4_GF/s", "cu_GF/s");
     if (show & SHOW_REL)
         printf(" | %10s %10s %10s %10s", "c1_%cu", "c2_%cu", "c3_%cu", "c4_%cu");
-    if (show & SHOW_ERR)
-        printf(" | %10s %10s %10s %10s %10s", "c1_err", "c2_err", "c3_err", "c4_err", "cu_err");
     printf("\n");
 
     for (const auto &r : results)
@@ -338,10 +268,6 @@ int main(int argc, char **argv)
                    rel_pct(r.gflops_custom2, r.gflops_cublas),
                    rel_pct(r.gflops_custom3, r.gflops_cublas),
                    rel_pct(r.gflops_custom4, r.gflops_cublas));
-
-        if (show & SHOW_ERR)
-            printf(" | %10.3e %10.3e %10.3e %10.3e %10.3e",
-                   r.err_custom1, r.err_custom2, r.err_custom3, r.err_custom4, r.err_cublas);
 
         printf("\n");
     }
