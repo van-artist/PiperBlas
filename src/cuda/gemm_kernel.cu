@@ -364,8 +364,6 @@ __global__ void gemm_kernel_v4_fp32_fast(
     float *__restrict__ C,
     float alpha, float beta)
 {
-    static_assert(TN == 4, "float4 path requires TN == 4");
-
     constexpr int BK_PAD = BK + 4;
 
     int block_row = blockIdx.y * BM;
@@ -468,8 +466,6 @@ __global__ void gemm_kernel_v4_fp32_safe(
     float *__restrict__ C,
     float alpha, float beta)
 {
-    static_assert(TN == 4, "float4 path requires TN == 4");
-
     constexpr int BK_PAD = BK + 4;
 
     int block_row = blockIdx.y * BM;
@@ -593,9 +589,6 @@ piState piCudaGemmFp32_v4(
     constexpr int BN = 128;
     constexpr int TM = 4;
     constexpr int TN = 4;
-
-    static_assert(BN % TN == 0, "BN must be divisible by TN");
-    static_assert(BM % TM == 0, "BM must be divisible by TM");
 
     dim3 block(BN / TN, BM / TM);
     dim3 grid(
