@@ -15,6 +15,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(PIPER_ENABLE_CUDA ON)
 option(PIPER_BUILD_TESTS ON)
+option(PIPER_REQUIRE_BLAS "Fail if BLAS not found" OFF)
 
 set(CMAKE_CUDA_ARCHITECTURES "70;75;80;86")
 
@@ -23,8 +24,13 @@ set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 
 find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
-find_package(BLAS REQUIRED)
+find_package(BLAS QUIET)
 find_package(CUDAToolkit REQUIRED)
+
+set(PIPER_HAVE_BLAS OFF)
+if(BLAS_FOUND)
+    set(PIPER_HAVE_BLAS ON)
+endif()
 
 set(PIPER_HAVE_MKL OFF)
 
@@ -37,6 +43,10 @@ if(MKL_ROOT)
     set(MKL_LIBRARY_DIR "${MKL_ROOT}/lib/intel64")
     set(MKL_LIBRARIES mkl_rt pthread m dl)
     set(PIPER_HAVE_MKL ON)
+endif()
+
+if(NOT PIPER_HAVE_BLAS AND PIPER_REQUIRE_BLAS)
+    message(FATAL_ERROR "BLAS not found but PIPER_REQUIRE_BLAS=ON")
 endif()
 
 set(PIPER_OPT_FLAGS
@@ -56,8 +66,16 @@ target_include_directories(piperDNN PUBLIC
 target_link_libraries(piperDNN PUBLIC
     Threads::Threads
     OpenMP::OpenMP_CXX
-    BLAS::BLAS
 )
+
+if(PIPER_HAVE_BLAS)
+    target_link_libraries(piperDNN PUBLIC BLAS::BLAS)
+    target_compile_definitions(piperDNN PUBLIC PIPER_HAVE_BLAS=1)
+endif()
+
+if(PIPER_HAVE_MKL)
+    target_compile_definitions(piperDNN PUBLIC PIPER_HAVE_MKL=1)
+endif()
 
 target_compile_options(piperDNN PRIVATE ${PIPER_OPT_FLAGS})
 
@@ -115,6 +133,14 @@ if(PIPER_BUILD_TESTS)
     foreach(test_src ${TEST_SOURCES})
         get_filename_component(test_name ${test_src} NAME_WE)
 
+        if(test_name STREQUAL "test_gemm" AND NOT PIPER_HAVE_BLAS)
+            continue()
+        endif()
+
+        if(test_name STREQUAL "test_spmv" AND NOT PIPER_HAVE_MKL)
+            continue()
+        endif()
+
         add_executable(${test_name} ${test_src})
 
         target_include_directories(${test_name} PRIVATE
@@ -139,7 +165,7 @@ if(PIPER_BUILD_TESTS)
             target_link_libraries(${test_name} PRIVATE ${MKL_LIBRARIES})
         endif()
 
-        if(test_name STREQUAL "test_gemm")
+        if(test_name STREQUAL "test_gemm" AND PIPER_HAVE_BLAS)
             target_link_libraries(${test_name} PRIVATE BLAS::BLAS)
         endif()
     endforeach()
