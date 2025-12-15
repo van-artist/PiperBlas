@@ -1,7 +1,9 @@
 #include <cuda_runtime.h>
+#include <stdio.h>
 #include "utils.h"
 #include "pi_type.h"
 #include "pi_csr.h"
+#include "cuda/cuda_kernels.h"
 
 template <typename T>
 __global__ void spmv_kernel(pi_csr A, const double *__restrict x, double *__restrict y)
@@ -14,7 +16,9 @@ __global__ void spmv_kernel(pi_csr A, const double *__restrict x, double *__rest
     int start = A.row_ptr[row_idx];
     int end = A.row_ptr[row_idx + 1];
     for (int j = start; j < end; ++j)
+    {
         acc += (T)A.values[j] * (T)x[A.col_idx[j]];
+    }
     y[row_idx] = (double)acc;
 }
 
@@ -24,13 +28,10 @@ piState pi_cuda_spmv_impl(const pi_csr *__restrict A, double *__restrict x, doub
     // y=A*x
     constexpr int BLOCK_SIZE = 256;
     // 每个block有8个warp
+    if (A->n_rows == 0)
+        return piSuccess;
     int grid = (A->n_rows + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-    if constexpr (std::is_same_v<T, double>)
-        spmv_kernel_fp64<<<grid, BLOCK_SIZE>>>(*A, x, y);
-    else
-        spmv_kernel_fp32<<<grid, BLOCK_SIZE>>>(*A, x, y);
-
+    spmv_kernel<T><<<grid, BLOCK_SIZE>>>(*A, x, y);
     CHECK_CUDA(cudaGetLastError());
     return piSuccess;
 }

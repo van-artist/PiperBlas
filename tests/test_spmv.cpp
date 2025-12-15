@@ -1,6 +1,6 @@
 #include <mkl.h>
 #include <cuda_runtime.h>
-
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -9,6 +9,10 @@
 #include <string>
 #include <string.h>
 #include <limits>
+#include <time.h>
+
+#include <dirent.h>
+#include <sys/stat.h>
 
 #include "pi_blas.h"
 #include "pi_csr.h"
@@ -72,10 +76,10 @@ static inline double rel_pct(double custom, double ref)
     return ref > 0.0 ? (custom / ref) * 100.0 : 0.0;
 }
 
-static void compute_err(const double *a, const double *b, size_t m, double *max_err, double *l2)
+static void compute_err(const double *a, const double *b, int m, double *max_err, double *l2)
 {
     double me = 0.0, s2 = 0.0;
-    for (size_t i = 0; i < m; ++i)
+    for (int i = 0; i < m; ++i)
     {
         double d = fabs(a[i] - b[i]);
         if (d > me)
@@ -128,9 +132,63 @@ static int parse_int_flag(int argc, char **argv, const char *key, int defv)
     return defv;
 }
 
+static bool is_directory(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return false;
+    return S_ISDIR(st.st_mode);
+}
+
+static bool is_regular_file(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return false;
+    return S_ISREG(st.st_mode);
+}
+
+static std::string join_path(const std::string &dir, const std::string &name)
+{
+    if (dir.empty())
+        return name;
+    if (dir.back() == '/')
+        return dir + name;
+    return dir + "/" + name;
+}
+
+static std::vector<std::string> list_files_in_dir(const char *dir_path)
+{
+    std::vector<std::string> files;
+
+    DIR *d = opendir(dir_path);
+    if (!d)
+        return files;
+
+    while (true)
+    {
+        struct dirent *ent = readdir(d);
+        if (!ent)
+            break;
+
+        const char *name = ent->d_name;
+        if (!name || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+
+        std::string full = join_path(dir_path, name);
+        if (is_regular_file(full.c_str()))
+            files.push_back(full);
+    }
+
+    closedir(d);
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
 struct Result
 {
-    size_t m, n, nnz;
+    std::string name;
+    int m, n, nnz;
     double gflops_pi, gflops_mkl, gflops_gpu64, gflops_gpu32;
     double maxerr_pi, l2_pi;
     double maxerr_gpu64, l2_gpu64;
@@ -147,32 +205,32 @@ static Result run_case(const char *bin_path, int warmup, int iters)
         exit(1);
     }
 
-    size_t m = A.n_rows;
-    size_t n = A.n_cols;
-    size_t nnz = A.nnz;
+    int m = A.n_rows;
+    int n = A.n_cols;
+    int nnz = A.nnz;
 
-    double *x = (double *)aligned_alloc64(n * sizeof(double));
-    double *y_pi = (double *)aligned_alloc64(m * sizeof(double));
-    double *y_mkl = (double *)aligned_alloc64(m * sizeof(double));
-    double *y_gpu64 = (double *)aligned_alloc64(m * sizeof(double));
-    double *y_gpu32 = (double *)aligned_alloc64(m * sizeof(double));
+    double *x = (double *)aligned_alloc64((size_t)n * sizeof(double));
+    double *y_pi = (double *)aligned_alloc64((size_t)m * sizeof(double));
+    double *y_mkl = (double *)aligned_alloc64((size_t)m * sizeof(double));
+    double *y_gpu64 = (double *)aligned_alloc64((size_t)m * sizeof(double));
+    double *y_gpu32 = (double *)aligned_alloc64((size_t)m * sizeof(double));
 
     uint64_t seed = 1;
-    fill_random_double(x, n, &seed);
+    fill_random_double(x, (size_t)n, &seed);
 
     MKL_INT m_mkl = (MKL_INT)m;
     MKL_INT n_mkl = (MKL_INT)n;
 
-    std::vector<MKL_INT> mkl_row_ptr(m + 1);
-    std::vector<MKL_INT> mkl_col_idx(nnz);
-    std::vector<double> mkl_values(nnz);
+    std::vector<MKL_INT> mkl_row_ptr((size_t)m + 1);
+    std::vector<MKL_INT> mkl_col_idx((size_t)nnz);
+    std::vector<double> mkl_values((size_t)nnz);
 
-    for (size_t i = 0; i <= m; ++i)
-        mkl_row_ptr[i] = (MKL_INT)A.row_ptr[i];
-    for (size_t j = 0; j < nnz; ++j)
+    for (int i = 0; i <= m; ++i)
+        mkl_row_ptr[(size_t)i] = (MKL_INT)A.row_ptr[i];
+    for (int j = 0; j < nnz; ++j)
     {
-        mkl_col_idx[j] = (MKL_INT)A.col_idx[j];
-        mkl_values[j] = A.values[j];
+        mkl_col_idx[(size_t)j] = (MKL_INT)A.col_idx[j];
+        mkl_values[(size_t)j] = A.values[j];
     }
 
     sparse_matrix_t Amkl;
@@ -196,65 +254,32 @@ static Result run_case(const char *bin_path, int warmup, int iters)
     descr.type = SPARSE_MATRIX_TYPE_GENERAL;
     mkl_sparse_optimize(Amkl);
 
-    if (m > (size_t)std::numeric_limits<int>::max() ||
-        n > (size_t)std::numeric_limits<int>::max() ||
-        nnz > (size_t)std::numeric_limits<int>::max())
-    {
-        fprintf(stderr, "矩阵太大，int 索引装不下\n");
-        exit(1);
-    }
-
-    std::vector<int> h_row_ptr_i32(m + 1);
-    std::vector<int> h_col_idx_i32(nnz);
-
-    for (size_t i = 0; i < m + 1; ++i)
-    {
-        if (A.row_ptr[i] > (size_t)std::numeric_limits<int>::max())
-        {
-            fprintf(stderr, "row_ptr 超出 int 范围\n");
-            exit(1);
-        }
-        h_row_ptr_i32[i] = (int)A.row_ptr[i];
-    }
-    for (size_t j = 0; j < nnz; ++j)
-    {
-        if (A.col_idx[j] > (size_t)std::numeric_limits<int>::max())
-        {
-            fprintf(stderr, "col_idx 超出 int 范围\n");
-            exit(1);
-        }
-        h_col_idx_i32[j] = (int)A.col_idx[j];
-    }
-
     int *d_row_ptr = nullptr;
     int *d_col_idx = nullptr;
     double *d_values = nullptr;
     double *d_x = nullptr;
     double *d_y = nullptr;
 
-    CHECK_CUDA(cudaMalloc((void **)&d_row_ptr, (m + 1) * sizeof(int)));
-    CHECK_CUDA(cudaMalloc((void **)&d_col_idx, nnz * sizeof(int)));
-    CHECK_CUDA(cudaMalloc((void **)&d_values, nnz * sizeof(double)));
-    CHECK_CUDA(cudaMalloc((void **)&d_x, n * sizeof(double)));
-    CHECK_CUDA(cudaMalloc((void **)&d_y, m * sizeof(double)));
+    CHECK_CUDA(cudaMalloc((void **)&d_row_ptr, ((size_t)m + 1) * sizeof(int)));
+    CHECK_CUDA(cudaMalloc((void **)&d_col_idx, (size_t)nnz * sizeof(int)));
+    CHECK_CUDA(cudaMalloc((void **)&d_values, (size_t)nnz * sizeof(double)));
+    CHECK_CUDA(cudaMalloc((void **)&d_x, (size_t)n * sizeof(double)));
+    CHECK_CUDA(cudaMalloc((void **)&d_y, (size_t)m * sizeof(double)));
 
-    CHECK_CUDA(cudaMemcpy(d_row_ptr, h_row_ptr_i32.data(), (m + 1) * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_col_idx, h_col_idx_i32.data(), nnz * sizeof(int), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_values, A.values, nnz * sizeof(double), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(d_x, x, n * sizeof(double), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_row_ptr, A.row_ptr, ((size_t)m + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_col_idx, A.col_idx, (size_t)nnz * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_values, A.values, (size_t)nnz * sizeof(double), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_x, x, (size_t)n * sizeof(double), cudaMemcpyHostToDevice));
 
     pi_csr A_dev = A;
-    A_dev.n_rows = (int)m;
-    A_dev.n_cols = (int)n;
-    A_dev.nnz = (int)nnz;
-    A_dev.row_ptr = (size_t *)d_row_ptr;
-    A_dev.col_idx = (size_t *)d_col_idx;
+    A_dev.row_ptr = d_row_ptr;
+    A_dev.col_idx = d_col_idx;
     A_dev.values = d_values;
 
-    memset(y_pi, 0, m * sizeof(double));
-    memset(y_mkl, 0, m * sizeof(double));
-    memset(y_gpu64, 0, m * sizeof(double));
-    memset(y_gpu32, 0, m * sizeof(double));
+    memset(y_pi, 0, (size_t)m * sizeof(double));
+    memset(y_mkl, 0, (size_t)m * sizeof(double));
+    memset(y_gpu64, 0, (size_t)m * sizeof(double));
+    memset(y_gpu32, 0, (size_t)m * sizeof(double));
 
     piSpMV(&A, x, y_pi);
 
@@ -274,13 +299,14 @@ static Result run_case(const char *bin_path, int warmup, int iters)
 
     (void)pi_cuda_spmv_fp64(&A_dev, d_x, d_y);
     CHECK_CUDA(cudaDeviceSynchronize());
-    CHECK_CUDA(cudaMemcpy(y_gpu64, d_y, m * sizeof(double), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(y_gpu64, d_y, (size_t)m * sizeof(double), cudaMemcpyDeviceToHost));
 
     (void)pi_cuda_spmv_fp32(&A_dev, d_x, d_y);
     CHECK_CUDA(cudaDeviceSynchronize());
-    CHECK_CUDA(cudaMemcpy(y_gpu32, d_y, m * sizeof(double), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(y_gpu32, d_y, (size_t)m * sizeof(double), cudaMemcpyDeviceToHost));
 
     Result out{};
+    out.name = bin_path;
     out.m = m;
     out.n = n;
     out.nnz = nnz;
@@ -350,40 +376,61 @@ int main(int argc, char **argv)
 
     if (argc < 2)
     {
-        fprintf(stderr, "用法: %s <matrix.bin> [--warmup=2] [--iters=10] [--show=abs,rel]\n", argv[0]);
+        fprintf(stderr, "用法: %s <matrix.bin|dir> [--warmup=2] [--iters=10] [--show=abs,rel]\n", argv[0]);
         return 1;
     }
 
-    const char *bin_path = argv[1];
+    const char *path = argv[1];
     int warmup = parse_int_flag(argc, argv, "--warmup", 2);
     int iters = parse_int_flag(argc, argv, "--iters", 10);
     int show = parse_show_mask(argc, argv);
 
-    Result r = run_case(bin_path, warmup, iters);
+    std::vector<std::string> inputs;
+    if (is_directory(path))
+        inputs = list_files_in_dir(path);
+    else
+        inputs.push_back(path);
+
+    if (inputs.empty())
+    {
+        fprintf(stderr, "没有找到输入文件: %s\n", path);
+        return 1;
+    }
+
+    std::vector<Result> results;
+    results.reserve(inputs.size());
+    for (auto &p : inputs)
+        results.push_back(run_case(p.c_str(), warmup, iters));
 
     printf("==== SpMV (timing only) ====\n");
-    printf("matrix: %s\n", bin_path);
-    printf("shape: %zux%zu  nnz=%zu  warmup=%d iters=%d\n", r.m, r.n, r.nnz, warmup, iters);
-    printf("err(pi vs mkl):    max=%.3e l2=%.3e\n", r.maxerr_pi, r.l2_pi);
-    printf("err(gpu64 vs mkl): max=%.3e l2=%.3e\n", r.maxerr_gpu64, r.l2_gpu64);
-    printf("err(gpu32 vs mkl): max=%.3e l2=%.3e\n", r.maxerr_gpu32, r.l2_gpu32);
 
-    printf("%8s", "case");
+    printf("%32s | %8s %8s %10s", "file", "m", "n", "nnz");
     if (show & SHOW_ABS)
         printf(" | %10s %10s %10s %10s", "pi_GF/s", "mkl_GF/s", "g64_GF/s", "g32_GF/s");
     if (show & SHOW_REL)
         printf(" | %10s %10s %10s", "pi_%mkl", "g64_%mkl", "g32_%mkl");
     printf("\n");
 
-    printf("%8s", "1");
-    if (show & SHOW_ABS)
-        printf(" | %10.3f %10.3f %10.3f %10.3f", r.gflops_pi, r.gflops_mkl, r.gflops_gpu64, r.gflops_gpu32);
-    if (show & SHOW_REL)
-        printf(" | %10.2f %10.2f %10.2f",
-               rel_pct(r.gflops_pi, r.gflops_mkl),
-               rel_pct(r.gflops_gpu64, r.gflops_mkl),
-               rel_pct(r.gflops_gpu32, r.gflops_mkl));
-    printf("\n");
+    for (const auto &r : results)
+    {
+        const char *name = r.name.c_str();
+        const char *base = strrchr(name, '/');
+        base = base ? base + 1 : name;
+
+        printf("%32s | %8d %8d %10d", base, r.m, r.n, r.nnz);
+
+        if (show & SHOW_ABS)
+            printf(" | %10.3f %10.3f %10.3f %10.3f",
+                   r.gflops_pi, r.gflops_mkl, r.gflops_gpu64, r.gflops_gpu32);
+
+        if (show & SHOW_REL)
+            printf(" | %10.2f %10.2f %10.2f",
+                   rel_pct(r.gflops_pi, r.gflops_mkl),
+                   rel_pct(r.gflops_gpu64, r.gflops_mkl),
+                   rel_pct(r.gflops_gpu32, r.gflops_mkl));
+
+        printf("\n");
+    }
 
     return 0;
 }

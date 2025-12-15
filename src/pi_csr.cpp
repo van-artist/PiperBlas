@@ -1,24 +1,28 @@
 #include "pi_type.h"
 #include "utils.h"
 #include "pi_csr.h"
+
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <limits>
 
-piState csr_create(size_t n_rows, size_t n_cols, size_t nnz, pi_csr *dist)
+piState csr_create(int n_rows, int n_cols, int nnz, pi_csr *dist)
 {
     if (!dist)
         return piErrBadHeader;
+    if (n_rows < 0 || n_cols < 0 || nnz < 0)
+        return piErrBadHeader;
 
-    auto row_ptr = std::unique_ptr<size_t[], decltype(&std::free)>(
-        static_cast<size_t *>(std::calloc(n_rows + 1, sizeof(size_t))), &std::free);
-    auto col_idx = std::unique_ptr<size_t[], decltype(&std::free)>(
-        static_cast<size_t *>(std::calloc(nnz, sizeof(size_t))), &std::free);
+    auto row_ptr = std::unique_ptr<int[], decltype(&std::free)>(
+        static_cast<int *>(std::calloc((size_t)n_rows + 1, sizeof(int))), &std::free);
+    auto col_idx = std::unique_ptr<int[], decltype(&std::free)>(
+        static_cast<int *>(std::calloc((size_t)nnz, sizeof(int))), &std::free);
     auto values = std::unique_ptr<double[], decltype(&std::free)>(
-        static_cast<double *>(std::calloc(nnz, sizeof(double))), &std::free);
+        static_cast<double *>(std::calloc((size_t)nnz, sizeof(double))), &std::free);
 
     if (!row_ptr || !col_idx || !values)
         return piErrAlloc;
@@ -44,7 +48,6 @@ piState csr_from_bin(const char *src_file, pi_csr *dist)
         return piErrOpenFile;
     }
 
-    // 读取头部
     int32_t nrows_s32 = 0, ncols_s32 = 0;
     uint32_t nnz_u32 = 0;
 
@@ -64,17 +67,26 @@ piState csr_from_bin(const char *src_file, pi_csr *dist)
         return piErrBadHeader;
     }
 
-    const size_t n_rows = (size_t)nrows_s32;
-    const size_t n_cols = (size_t)ncols_s32;
-    const size_t nnz = (size_t)nnz_u32;
+    if (nrows_s32 > std::numeric_limits<int>::max() ||
+        ncols_s32 > std::numeric_limits<int>::max() ||
+        nnz_u32 > (uint32_t)std::numeric_limits<int>::max())
+    {
+        std::fprintf(stderr, "维度/nnz 超出 int 范围: nrows=%d ncols=%d nnz=%u\n",
+                     nrows_s32, ncols_s32, nnz_u32);
+        std::fclose(f);
+        return piErrBadHeader;
+    }
 
-    // 内存分配
-    auto row_ptr = std::unique_ptr<size_t[], decltype(&std::free)>(
-        static_cast<size_t *>(std::malloc((n_rows + 1) * sizeof(size_t))), &std::free);
-    auto col_idx = std::unique_ptr<size_t[], decltype(&std::free)>(
-        static_cast<size_t *>(std::malloc(nnz * sizeof(size_t))), &std::free);
+    const int n_rows = (int)nrows_s32;
+    const int n_cols = (int)ncols_s32;
+    const int nnz = (int)nnz_u32;
+
+    auto row_ptr = std::unique_ptr<int[], decltype(&std::free)>(
+        static_cast<int *>(std::malloc(((size_t)n_rows + 1) * sizeof(int))), &std::free);
+    auto col_idx = std::unique_ptr<int[], decltype(&std::free)>(
+        static_cast<int *>(std::malloc((size_t)nnz * sizeof(int))), &std::free);
     auto values = std::unique_ptr<double[], decltype(&std::free)>(
-        static_cast<double *>(std::malloc(nnz * sizeof(double))), &std::free);
+        static_cast<double *>(std::malloc((size_t)nnz * sizeof(double))), &std::free);
 
     if (!row_ptr || !col_idx || !values)
     {
@@ -83,11 +95,10 @@ piState csr_from_bin(const char *src_file, pi_csr *dist)
         return piErrAlloc;
     }
 
-    // 读取 rows/cols 为 uint32_t 临时缓冲，再拓宽到 size_t
     auto tmp_rows = std::unique_ptr<uint32_t[], decltype(&std::free)>(
-        static_cast<uint32_t *>(std::malloc((n_rows + 1) * sizeof(uint32_t))), &std::free);
+        static_cast<uint32_t *>(std::malloc(((size_t)n_rows + 1) * sizeof(uint32_t))), &std::free);
     auto tmp_cols = std::unique_ptr<uint32_t[], decltype(&std::free)>(
-        static_cast<uint32_t *>(std::malloc(nnz * sizeof(uint32_t))), &std::free);
+        static_cast<uint32_t *>(std::malloc((size_t)nnz * sizeof(uint32_t))), &std::free);
     if (!tmp_rows || !tmp_cols)
     {
         std::fprintf(stderr, "临时缓冲分配失败。\n");
@@ -95,20 +106,19 @@ piState csr_from_bin(const char *src_file, pi_csr *dist)
         return piErrAlloc;
     }
 
-    // 读取三个数组段
-    if (std::fread(tmp_rows.get(), sizeof(uint32_t), (n_rows + 1), f) != (n_rows + 1))
+    if (std::fread(tmp_rows.get(), sizeof(uint32_t), (size_t)n_rows + 1, f) != (size_t)n_rows + 1)
     {
         std::fprintf(stderr, "读取 row_ptr 失败（IO）。\n");
         std::fclose(f);
         return piErrIO;
     }
-    if (std::fread(tmp_cols.get(), sizeof(uint32_t), nnz, f) != nnz)
+    if (std::fread(tmp_cols.get(), sizeof(uint32_t), (size_t)nnz, f) != (size_t)nnz)
     {
         std::fprintf(stderr, "读取 col_idx 失败（IO）。\n");
         std::fclose(f);
         return piErrIO;
     }
-    if (std::fread(values.get(), sizeof(double), nnz, f) != nnz)
+    if (std::fread(values.get(), sizeof(double), (size_t)nnz, f) != (size_t)nnz)
     {
         std::fprintf(stderr, "读取 values 失败（IO）。\n");
         std::fclose(f);
@@ -116,18 +126,23 @@ piState csr_from_bin(const char *src_file, pi_csr *dist)
     }
     std::fclose(f);
 
-    // 拓宽
     if (tmp_rows[0] != 0U)
     {
         std::fprintf(stderr, "非法 CSR：row_ptr[0] 应为 0，实际=%u\n", tmp_rows[0]);
         return piErrCSRInvalid;
     }
-    for (size_t i = 0; i < n_rows; ++i)
+    for (int i = 0; i < n_rows; ++i)
     {
         if (tmp_rows[i] > tmp_rows[i + 1])
         {
-            std::fprintf(stderr, "非法 CSR：row_ptr 非递增，在 i=%zu 处出现 %u > %u\n",
+            std::fprintf(stderr, "非法 CSR：row_ptr 非递增，在 i=%d 处出现 %u > %u\n",
                          i, tmp_rows[i], tmp_rows[i + 1]);
+            return piErrCSRInvalid;
+        }
+        if (tmp_rows[i + 1] > nnz_u32)
+        {
+            std::fprintf(stderr, "非法 CSR：row_ptr[%d]=%u 超出 nnz=%u\n",
+                         i + 1, tmp_rows[i + 1], nnz_u32);
             return piErrCSRInvalid;
         }
     }
@@ -138,17 +153,18 @@ piState csr_from_bin(const char *src_file, pi_csr *dist)
         return piErrCSRInvalid;
     }
 
-    for (size_t i = 0; i < n_rows + 1; ++i)
-        row_ptr[i] = static_cast<size_t>(tmp_rows[i]);
-    for (size_t k = 0; k < nnz; ++k)
+    for (int i = 0; i < n_rows + 1; ++i)
+        row_ptr[i] = (int)tmp_rows[i];
+
+    for (int k = 0; k < nnz; ++k)
     {
-        if (tmp_cols[k] >= n_cols)
+        if (tmp_cols[k] >= (uint32_t)n_cols)
         {
-            std::fprintf(stderr, "非法 CSR：col_idx[%zu]=%u 超界 (n_cols=%zu)\n",
+            std::fprintf(stderr, "非法 CSR：col_idx[%d]=%u 超界 (n_cols=%d)\n",
                          k, tmp_cols[k], n_cols);
             return piErrCSRInvalid;
         }
-        col_idx[k] = static_cast<size_t>(tmp_cols[k]);
+        col_idx[k] = (int)tmp_cols[k];
     }
 
     dist->n_rows = n_rows;
@@ -168,21 +184,27 @@ void csr_destroy(pi_csr *A)
     std::free(A->row_ptr);
     std::free(A->col_idx);
     std::free(A->values);
+    A->row_ptr = nullptr;
+    A->col_idx = nullptr;
+    A->values = nullptr;
+    A->n_rows = 0;
+    A->n_cols = 0;
+    A->nnz = 0;
 }
 
 void csr_print(const pi_csr *A)
 {
     if (!A)
         return;
-    std::printf("pi_csr Matrix: %zu x %zu, nnz = %zu\n", A->n_rows, A->n_cols, A->nnz);
+    std::printf("pi_csr Matrix: %d x %d, nnz = %d\n", A->n_rows, A->n_cols, A->nnz);
     std::printf("row_ptr: ");
-    for (size_t i = 0; i < A->n_rows + 1; ++i)
-        std::printf("%zu ", A->row_ptr[i]);
+    for (int i = 0; i < A->n_rows + 1; ++i)
+        std::printf("%d ", A->row_ptr[i]);
     std::printf("\ncol_idx: ");
-    for (size_t i = 0; i < A->nnz; ++i)
-        std::printf("%zu ", A->col_idx[i]);
+    for (int i = 0; i < A->nnz; ++i)
+        std::printf("%d ", A->col_idx[i]);
     std::printf("\nvalues:  ");
-    for (size_t i = 0; i < A->nnz; ++i)
+    for (int i = 0; i < A->nnz; ++i)
         std::printf("%.3f ", A->values[i]);
     std::printf("\n");
 }
