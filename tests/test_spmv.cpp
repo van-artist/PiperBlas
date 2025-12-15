@@ -1,28 +1,29 @@
 #include <mkl.h>
+#include <cuda_runtime.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
-#include <time.h>
-#include <sys/time.h>
-#include <string.h>
 #include <vector>
-#include <algorithm>
+#include <string>
+#include <string.h>
+#include <limits>
+
 #include "pi_blas.h"
 #include "pi_csr.h"
 #include "pi_type.h"
+#include "pi_config.h"
+#include "utils.h"
+#include "cuda/cuda_kernels.h"
 
-static double wall_now_gettimeofday(void)
-{
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (double)tv.tv_sec + (double)tv.tv_usec * 1e-6;
-}
+piState pi_cuda_spmv_fp32(const pi_csr *__restrict A, double *__restrict x, double *__restrict y);
+piState pi_cuda_spmv_fp64(const pi_csr *__restrict A, double *__restrict x, double *__restrict y);
 
-static void *xalloc(size_t nbytes)
+static void *aligned_alloc64(size_t bytes)
 {
-    void *p = NULL;
-    if (posix_memalign(&p, 64, nbytes) != 0 || !p)
+    void *p = nullptr;
+    if (posix_memalign(&p, 64, bytes) != 0 || !p)
     {
         fprintf(stderr, "alloc fail\n");
         exit(1);
@@ -30,63 +31,135 @@ static void *xalloc(size_t nbytes)
     return p;
 }
 
-typedef struct
+static void fill_random_double(double *x, size_t n, uint64_t *seed)
 {
-    double avg, std, best;
-} Stats;
-
-static Stats summarize(const std::vector<double> &v)
-{
-    if (v.empty())
-        return {0, 0, 0};
-    double sum = 0.0, sum2 = 0.0, best = v[0];
-    for (double x : v)
+    for (size_t i = 0; i < n; i++)
     {
-        sum += x;
-        sum2 += x * x;
-        if (x < best)
-            best = x;
+        *seed = (*seed * 2862933555777941757ULL) + 3037000493ULL;
+        double v = ((double)(*seed >> 11) / (double)(1ULL << 53)) * 2.0 - 1.0;
+        x[i] = v;
     }
-    double n = (double)v.size();
-    double avg = sum / n;
-    double var = fmax(0.0, sum2 / n - avg * avg);
-    return {avg, sqrt(var), best};
 }
 
-int main(int argc, char **argv)
+template <class F>
+static float time_avg_ms(F launch, int warmup, int iters)
 {
-    if (argc < 2)
+    cudaEvent_t start, stop;
+    CHECK_CUDA(cudaEventCreate(&start));
+    CHECK_CUDA(cudaEventCreate(&stop));
+
+    for (int i = 0; i < warmup; ++i)
+        launch();
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    CHECK_CUDA(cudaEventRecord(start));
+    for (int i = 0; i < iters; ++i)
+        launch();
+    CHECK_CUDA(cudaEventRecord(stop));
+    CHECK_CUDA(cudaEventSynchronize(stop));
+
+    float ms = 0.0f;
+    CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
+
+    CHECK_CUDA(cudaEventDestroy(start));
+    CHECK_CUDA(cudaEventDestroy(stop));
+
+    return ms / (float)iters;
+}
+
+static inline double rel_pct(double custom, double ref)
+{
+    return ref > 0.0 ? (custom / ref) * 100.0 : 0.0;
+}
+
+static void compute_err(const double *a, const double *b, size_t m, double *max_err, double *l2)
+{
+    double me = 0.0, s2 = 0.0;
+    for (size_t i = 0; i < m; ++i)
     {
-        fprintf(stderr, "用法: %s <matrix.bin> [warmup=2] [iters=10] [cycles=3]\n", argv[0]);
-        return 1;
+        double d = fabs(a[i] - b[i]);
+        if (d > me)
+            me = d;
+        s2 += d * d;
     }
+    *max_err = me;
+    *l2 = sqrt(s2);
+}
 
-    const char *bin_path = argv[1];
-    int warmup = (argc >= 3) ? atoi(argv[2]) : 2;
-    int iters = (argc >= 4) ? atoi(argv[3]) : 10;
-    int cycles = (argc >= 5) ? atoi(argv[4]) : 3;
+enum ShowMask : int
+{
+    SHOW_ABS = 1 << 0,
+    SHOW_REL = 1 << 1,
+};
 
+static int parse_show_mask(int argc, char **argv)
+{
+    int mask = SHOW_ABS | SHOW_REL;
+    for (int i = 1; i < argc; ++i)
+    {
+        const char *a = argv[i];
+        if (strncmp(a, "--show=", 7) == 0)
+        {
+            mask = 0;
+            std::string s(a + 7);
+            for (auto &c : s)
+                if (c == ',')
+                    c = '+';
+            if (s.find("abs") != std::string::npos)
+                mask |= SHOW_ABS;
+            if (s.find("rel") != std::string::npos)
+                mask |= SHOW_REL;
+            if (mask == 0)
+                mask = SHOW_ABS | SHOW_REL;
+        }
+    }
+    return mask;
+}
+
+static int parse_int_flag(int argc, char **argv, const char *key, int defv)
+{
+    const size_t klen = strlen(key);
+    for (int i = 1; i < argc; ++i)
+    {
+        const char *a = argv[i];
+        if (strncmp(a, key, klen) == 0 && a[klen] == '=')
+            return atoi(a + klen + 1);
+    }
+    return defv;
+}
+
+struct Result
+{
+    size_t m, n, nnz;
+    double gflops_pi, gflops_mkl, gflops_gpu64, gflops_gpu32;
+    double maxerr_pi, l2_pi;
+    double maxerr_gpu64, l2_gpu64;
+    double maxerr_gpu32, l2_gpu32;
+};
+
+static Result run_case(const char *bin_path, int warmup, int iters)
+{
     pi_csr A;
     piState st = csr_from_bin(bin_path, &A);
     if (st != piSuccess)
     {
         fprintf(stderr, "csr_from_bin 读取失败: %s\n", bin_path);
-        return 1;
+        exit(1);
     }
+
     size_t m = A.n_rows;
     size_t n = A.n_cols;
     size_t nnz = A.nnz;
-    printf("已加载矩阵: %zu x %zu, nnz = %zu\n", m, n, nnz);
 
-    double *x = (double *)xalloc(n * sizeof(double));
-    double *y1 = (double *)xalloc(m * sizeof(double)); // piSpMV 输出
-    double *y2 = (double *)xalloc(m * sizeof(double)); // MKL SpMV 输出
+    double *x = (double *)aligned_alloc64(n * sizeof(double));
+    double *y_pi = (double *)aligned_alloc64(m * sizeof(double));
+    double *y_mkl = (double *)aligned_alloc64(m * sizeof(double));
+    double *y_gpu64 = (double *)aligned_alloc64(m * sizeof(double));
+    double *y_gpu32 = (double *)aligned_alloc64(m * sizeof(double));
 
-    srand(1);
-    for (size_t i = 0; i < n; ++i)
-        x[i] = ((double)(rand()) / RAND_MAX) * 2.0 - 1.0;
+    uint64_t seed = 1;
+    fill_random_double(x, n, &seed);
 
-    // ======== 构造 MKL CSR 矩阵 ========
     MKL_INT m_mkl = (MKL_INT)m;
     MKL_INT n_mkl = (MKL_INT)n;
 
@@ -116,23 +189,74 @@ int main(int argc, char **argv)
     if (status != SPARSE_STATUS_SUCCESS)
     {
         fprintf(stderr, "mkl_sparse_d_create_csr 失败, status = %d\n", status);
-        csr_destroy(&A);
-        free(x);
-        free(y1);
-        free(y2);
-        return 1;
+        exit(1);
     }
 
     struct matrix_descr descr;
     descr.type = SPARSE_MATRIX_TYPE_GENERAL;
-
     mkl_sparse_optimize(Amkl);
 
-    // ======== 先做一次正确性验证 ========
-    memset(y1, 0, m * sizeof(double));
-    memset(y2, 0, m * sizeof(double));
+    if (m > (size_t)std::numeric_limits<int>::max() ||
+        n > (size_t)std::numeric_limits<int>::max() ||
+        nnz > (size_t)std::numeric_limits<int>::max())
+    {
+        fprintf(stderr, "矩阵太大，int 索引装不下\n");
+        exit(1);
+    }
 
-    piSpMV(&A, x, y1);
+    std::vector<int> h_row_ptr_i32(m + 1);
+    std::vector<int> h_col_idx_i32(nnz);
+
+    for (size_t i = 0; i < m + 1; ++i)
+    {
+        if (A.row_ptr[i] > (size_t)std::numeric_limits<int>::max())
+        {
+            fprintf(stderr, "row_ptr 超出 int 范围\n");
+            exit(1);
+        }
+        h_row_ptr_i32[i] = (int)A.row_ptr[i];
+    }
+    for (size_t j = 0; j < nnz; ++j)
+    {
+        if (A.col_idx[j] > (size_t)std::numeric_limits<int>::max())
+        {
+            fprintf(stderr, "col_idx 超出 int 范围\n");
+            exit(1);
+        }
+        h_col_idx_i32[j] = (int)A.col_idx[j];
+    }
+
+    int *d_row_ptr = nullptr;
+    int *d_col_idx = nullptr;
+    double *d_values = nullptr;
+    double *d_x = nullptr;
+    double *d_y = nullptr;
+
+    CHECK_CUDA(cudaMalloc((void **)&d_row_ptr, (m + 1) * sizeof(int)));
+    CHECK_CUDA(cudaMalloc((void **)&d_col_idx, nnz * sizeof(int)));
+    CHECK_CUDA(cudaMalloc((void **)&d_values, nnz * sizeof(double)));
+    CHECK_CUDA(cudaMalloc((void **)&d_x, n * sizeof(double)));
+    CHECK_CUDA(cudaMalloc((void **)&d_y, m * sizeof(double)));
+
+    CHECK_CUDA(cudaMemcpy(d_row_ptr, h_row_ptr_i32.data(), (m + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_col_idx, h_col_idx_i32.data(), nnz * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_values, A.values, nnz * sizeof(double), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_x, x, n * sizeof(double), cudaMemcpyHostToDevice));
+
+    pi_csr A_dev = A;
+    A_dev.n_rows = (int)m;
+    A_dev.n_cols = (int)n;
+    A_dev.nnz = (int)nnz;
+    A_dev.row_ptr = (size_t *)d_row_ptr;
+    A_dev.col_idx = (size_t *)d_col_idx;
+    A_dev.values = d_values;
+
+    memset(y_pi, 0, m * sizeof(double));
+    memset(y_mkl, 0, m * sizeof(double));
+    memset(y_gpu64, 0, m * sizeof(double));
+    memset(y_gpu32, 0, m * sizeof(double));
+
+    piSpMV(&A, x, y_pi);
 
     status = mkl_sparse_d_mv(
         SPARSE_OPERATION_NON_TRANSPOSE,
@@ -141,101 +265,125 @@ int main(int argc, char **argv)
         descr,
         x,
         0.0,
-        y2);
-
+        y_mkl);
     if (status != SPARSE_STATUS_SUCCESS)
     {
         fprintf(stderr, "mkl_sparse_d_mv 失败, status = %d\n", status);
-        mkl_sparse_destroy(Amkl);
-        csr_destroy(&A);
-        free(x);
-        free(y1);
-        free(y2);
-        return 1;
+        exit(1);
     }
 
-    double max_err = 0.0, l2 = 0.0;
-    for (size_t i = 0; i < m; ++i)
-    {
-        double d = fabs(y1[i] - y2[i]);
-        if (d > max_err)
-            max_err = d;
-        l2 += d * d;
-    }
-    l2 = sqrt(l2);
-    printf("结果验证: max_err = %.3e, l2 = %.3e\n", max_err, l2);
+    (void)pi_cuda_spmv_fp64(&A_dev, d_x, d_y);
+    CHECK_CUDA(cudaDeviceSynchronize());
+    CHECK_CUDA(cudaMemcpy(y_gpu64, d_y, m * sizeof(double), cudaMemcpyDeviceToHost));
+
+    (void)pi_cuda_spmv_fp32(&A_dev, d_x, d_y);
+    CHECK_CUDA(cudaDeviceSynchronize());
+    CHECK_CUDA(cudaMemcpy(y_gpu32, d_y, m * sizeof(double), cudaMemcpyDeviceToHost));
+
+    Result out{};
+    out.m = m;
+    out.n = n;
+    out.nnz = nnz;
+
+    compute_err(y_pi, y_mkl, m, &out.maxerr_pi, &out.l2_pi);
+    compute_err(y_gpu64, y_mkl, m, &out.maxerr_gpu64, &out.l2_gpu64);
+    compute_err(y_gpu32, y_mkl, m, &out.maxerr_gpu32, &out.l2_gpu32);
 
     const double ops = 2.0 * (double)nnz;
 
-    // ======== warmup ========
-    for (int k = 0; k < warmup; ++k)
+    for (int i = 0; i < warmup; ++i)
     {
-        piSpMV(&A, x, y1);
-        mkl_sparse_d_mv(
-            SPARSE_OPERATION_NON_TRANSPOSE,
-            1.0,
-            Amkl,
-            descr,
-            x,
-            0.0,
-            y2);
+        piSpMV(&A, x, y_pi);
+        mkl_sparse_d_mv(SPARSE_OPERATION_NON_TRANSPOSE, 1.0, Amkl, descr, x, 0.0, y_mkl);
+        (void)pi_cuda_spmv_fp64(&A_dev, d_x, d_y);
+        (void)pi_cuda_spmv_fp32(&A_dev, d_x, d_y);
     }
+    CHECK_CUDA(cudaDeviceSynchronize());
 
-    std::vector<double> pi_cycle_avg, mkl_cycle_avg;
-    std::vector<double> pi_all, mkl_all;
-
-    // ======== 正式计时 ========
-    for (int c = 0; c < cycles; ++c)
+    auto time_cpu_s = [&](auto fn)
     {
-        double sum_pi = 0.0;
-        double sum_mkl = 0.0;
+        double t0 = 0.0, t1 = 0.0;
+        t0 = (double)clock() / (double)CLOCKS_PER_SEC;
+        for (int i = 0; i < iters; ++i)
+            fn();
+        t1 = (double)clock() / (double)CLOCKS_PER_SEC;
+        return (t1 - t0) / (double)iters;
+    };
 
-        for (int it = 0; it < iters; ++it)
-        {
-            double t0 = wall_now_gettimeofday();
-            piSpMV(&A, x, y1);
-            double t1 = wall_now_gettimeofday();
-            sum_pi += (t1 - t0);
-            pi_all.push_back(t1 - t0);
+    double pi_s = time_cpu_s([&]()
+                             { piSpMV(&A, x, y_pi); });
+    double mkl_s = time_cpu_s([&]()
+                              { mkl_sparse_d_mv(SPARSE_OPERATION_NON_TRANSPOSE, 1.0, Amkl, descr, x, 0.0, y_mkl); });
 
-            double t2 = wall_now_gettimeofday();
-            mkl_sparse_d_mv(
-                SPARSE_OPERATION_NON_TRANSPOSE,
-                1.0,
-                Amkl,
-                descr,
-                x,
-                0.0,
-                y2);
-            double t3 = wall_now_gettimeofday();
-            sum_mkl += (t3 - t2);
-            mkl_all.push_back(t3 - t2);
-        }
+    float gpu64_ms = time_avg_ms([&]()
+                                 { (void)pi_cuda_spmv_fp64(&A_dev, d_x, d_y); }, warmup, iters);
+    float gpu32_ms = time_avg_ms([&]()
+                                 { (void)pi_cuda_spmv_fp32(&A_dev, d_x, d_y); }, warmup, iters);
 
-        pi_cycle_avg.push_back(sum_pi / iters);
-        mkl_cycle_avg.push_back(sum_mkl / iters);
-    }
+    out.gflops_pi = ops / pi_s * 1e-9;
+    out.gflops_mkl = ops / mkl_s * 1e-9;
+    out.gflops_gpu64 = ops / (gpu64_ms * 1e-3) * 1e-9;
+    out.gflops_gpu32 = ops / (gpu32_ms * 1e-3) * 1e-9;
 
-    Stats s_pi = summarize(pi_cycle_avg);
-    Stats s_mkl = summarize(mkl_cycle_avg);
-    Stats s_pi_all = summarize(pi_all);
-    Stats s_mkl_all = summarize(mkl_all);
-
-    double gflops_pi_avg = (ops / s_pi.avg) * 1e-9;
-    double gflops_mkl_avg = (ops / s_mkl.avg) * 1e-9;
-    double gflops_pi_best = (ops / s_pi_all.best) * 1e-9;
-    double gflops_mkl_best = (ops / s_mkl_all.best) * 1e-9;
-
-    printf("测试配置: warmup=%d iters/周期=%d cycles=%d\n", warmup, iters, cycles);
-    printf("PI:   平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
-           s_pi.avg, s_pi.std, s_pi_all.best, gflops_pi_avg, gflops_pi_best);
-    printf("MKL:  平均=%.6f s  Std=%.6f  Best=%.6f s  ⇒  Avg=%.3f GF/s  Best=%.3f GF/s\n",
-           s_mkl.avg, s_mkl.std, s_mkl_all.best, gflops_mkl_avg, gflops_mkl_best);
+    CHECK_CUDA(cudaFree(d_row_ptr));
+    CHECK_CUDA(cudaFree(d_col_idx));
+    CHECK_CUDA(cudaFree(d_values));
+    CHECK_CUDA(cudaFree(d_x));
+    CHECK_CUDA(cudaFree(d_y));
 
     mkl_sparse_destroy(Amkl);
+
     free(x);
-    free(y1);
-    free(y2);
+    free(y_pi);
+    free(y_mkl);
+    free(y_gpu64);
+    free(y_gpu32);
+
     csr_destroy(&A);
+
+    return out;
+}
+
+int main(int argc, char **argv)
+{
+    config_init();
+
+    if (argc < 2)
+    {
+        fprintf(stderr, "用法: %s <matrix.bin> [--warmup=2] [--iters=10] [--show=abs,rel]\n", argv[0]);
+        return 1;
+    }
+
+    const char *bin_path = argv[1];
+    int warmup = parse_int_flag(argc, argv, "--warmup", 2);
+    int iters = parse_int_flag(argc, argv, "--iters", 10);
+    int show = parse_show_mask(argc, argv);
+
+    Result r = run_case(bin_path, warmup, iters);
+
+    printf("==== SpMV (timing only) ====\n");
+    printf("matrix: %s\n", bin_path);
+    printf("shape: %zux%zu  nnz=%zu  warmup=%d iters=%d\n", r.m, r.n, r.nnz, warmup, iters);
+    printf("err(pi vs mkl):    max=%.3e l2=%.3e\n", r.maxerr_pi, r.l2_pi);
+    printf("err(gpu64 vs mkl): max=%.3e l2=%.3e\n", r.maxerr_gpu64, r.l2_gpu64);
+    printf("err(gpu32 vs mkl): max=%.3e l2=%.3e\n", r.maxerr_gpu32, r.l2_gpu32);
+
+    printf("%8s", "case");
+    if (show & SHOW_ABS)
+        printf(" | %10s %10s %10s %10s", "pi_GF/s", "mkl_GF/s", "g64_GF/s", "g32_GF/s");
+    if (show & SHOW_REL)
+        printf(" | %10s %10s %10s", "pi_%mkl", "g64_%mkl", "g32_%mkl");
+    printf("\n");
+
+    printf("%8s", "1");
+    if (show & SHOW_ABS)
+        printf(" | %10.3f %10.3f %10.3f %10.3f", r.gflops_pi, r.gflops_mkl, r.gflops_gpu64, r.gflops_gpu32);
+    if (show & SHOW_REL)
+        printf(" | %10.2f %10.2f %10.2f",
+               rel_pct(r.gflops_pi, r.gflops_mkl),
+               rel_pct(r.gflops_gpu64, r.gflops_mkl),
+               rel_pct(r.gflops_gpu32, r.gflops_mkl));
+    printf("\n");
+
     return 0;
 }

@@ -1,8 +1,8 @@
 #pragma once
 #include <stddef.h>
 #include "pi_type.h"
+#include "pi_csr.h"
 piState piSpMV(const pi_csr *A, double *x, double *y);
-// fp32/fp64 GEMM; 保留旧接口以兼容历史调用
 piState piGemmFp32(float *A, float *B, float *C, float alpha, float beta, size_t m, size_t k, size_t n);
 piState piGemmFp32_v2(float *A, float *B, float *C,
                       float alpha, float beta,

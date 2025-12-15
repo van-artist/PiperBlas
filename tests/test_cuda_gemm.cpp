@@ -101,7 +101,7 @@ static Result run_case(cublasHandle_t handle, size_t N)
     const size_t csz = (size_t)m * n;
 
     const float alpha = 1.2f;
-    const float beta_time = 0.0f;
+    const float beta = 0.0f;
 
     float *A = (float *)aligned_alloc64(asz * sizeof(float));
     float *B = (float *)aligned_alloc64(bsz * sizeof(float));
@@ -136,24 +136,24 @@ static Result run_case(cublasHandle_t handle, size_t N)
 
     // cuBLAS
     time_only([&]()
-              { device_gemm_cublas_rowmajor(handle, m, n, k, alpha, dA, k, dB, n, beta_time, dC, n); },
+              { device_gemm_cublas_rowmajor(handle, m, n, k, alpha, dA, k, dB, n, beta, dC, n); },
               out.gflops_cublas);
 
     // custom kernels (timing only)
     time_only([&]()
-              { (void)piCudaGemmFp32(dA, dB, dC, alpha, beta_time, m, k, n); },
+              { (void)piCudaGemmFp32(dA, dB, dC, alpha, beta, m, k, n); },
               out.gflops_custom1);
 
     time_only([&]()
-              { (void)piCudaGemmFp32_v2(dA, dB, dC, alpha, beta_time, m, k, n); },
+              { (void)piCudaGemmFp32_v2(dA, dB, dC, alpha, beta, m, k, n); },
               out.gflops_custom2);
 
     time_only([&]()
-              { (void)piCudaGemmFp32_v3(dA, dB, dC, alpha, beta_time, m, k, n); },
+              { (void)piCudaGemmFp32_v3(dA, dB, dC, alpha, beta, m, k, n); },
               out.gflops_custom3);
 
     time_only([&]()
-              { (void)piCudaGemmFp32_v4(dA, dB, dC, alpha, beta_time, m, k, n); },
+              { (void)piCudaGemmFp32_v4(dA, dB, dC, alpha, beta, m, k, n); },
               out.gflops_custom4);
 
     free(A);

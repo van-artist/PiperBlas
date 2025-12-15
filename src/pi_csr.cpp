@@ -1,6 +1,6 @@
 #include "pi_type.h"
 #include "utils.h"
-
+#include "pi_csr.h"
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
