@@ -1,0 +1,13 @@
+#!/bin/bash
+rm -rf build
+mkdir build
+
+rm -rf build
+cmake -S . -B build \
+  -DPIPER_ENABLE_CUDA=ON \
+  -DPIPER_HAVE_CUDA=ON \
+  -DPIPER_ENABLE_CPU_BLAS=ON \
+  -DPIPER_HAVE_BLAS=ON \
+  -DPIPER_ENABLE_MKL=ON \
+  -DPIPER_HAVE_MKL=ON \
+cmake --build build -j
