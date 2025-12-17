@@ -123,6 +123,10 @@ target_include_directories(piper_rt_core
 )
 
 target_link_libraries(piper_rt_core PUBLIC piper_rt_build)
+if(PIPER_HAVE_CUDA)
+  target_link_libraries(piper_rt_core PUBLIC CUDA::cudart)
+endif()
+
 
 target_compile_definitions(piper_rt_core PUBLIC
   PIPER_HAVE_BLAS=$<BOOL:${PIPER_HAVE_BLAS}>
