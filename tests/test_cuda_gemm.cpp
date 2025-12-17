@@ -113,7 +113,7 @@ static Result run_case(int N)
     return r;
 }
 
-int main()
+int main(int argc, char **argv)
 {
     bool rich = false;
     for (int i = 1; i < argc; ++i)
