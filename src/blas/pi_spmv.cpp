@@ -1,8 +1,8 @@
 #include "pi_blas.h"
-#include "pi_config.h"
+#include "core/pi_config.h"
 #include "pi_type.h"
 #include "pi_csr.h"
-#include "utils.h"
+#include "core/common.h"
 
 #include <cstdlib>
 #include <pthread.h>

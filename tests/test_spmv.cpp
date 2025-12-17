@@ -1,3 +1,13 @@
+#if !defined(PIPER_HAVE_CUDA) || !PIPER_HAVE_CUDA || !defined(PIPER_HAVE_MKL) || !PIPER_HAVE_MKL
+#include <cstdio>
+
+int main()
+{
+    std::fprintf(stderr, "CUDA or MKL support is disabled.\n");
+    return 0;
+}
+
+#else
 #include <mkl.h>
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -17,8 +27,8 @@
 #include "pi_blas.h"
 #include "pi_csr.h"
 #include "pi_type.h"
-#include "pi_config.h"
-#include "utils.h"
+#include "core/pi_config.h"
+#include "core/common.h"
 #include "cuda/cuda_kernels.h"
 
 piState pi_cuda_spmv_fp32(const pi_csr *__restrict A, double *__restrict x, double *__restrict y);
@@ -434,3 +444,4 @@ int main(int argc, char **argv)
 
     return 0;
 }
+#endif

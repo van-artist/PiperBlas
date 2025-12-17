@@ -1,6 +1,6 @@
 #include <cuda_runtime.h>
 #include "pi_type.h"
-#include "utils.h"
+#include "core/common.h"
 
 __global__ void axpy_kernel(int n, float alpha, const float *__restrict__ x, float *__restrict__ y)
 {

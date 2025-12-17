@@ -1,6 +1,6 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
-#include "utils.h"
+#include "core/common.h"
 #include "pi_type.h"
 #include "pi_csr.h"
 #include "cuda/cuda_kernels.h"
