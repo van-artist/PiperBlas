@@ -320,7 +320,7 @@ __global__ void gemm_kernel_fp32_safe(
     }
 }
 
-piState piCudaGemmFp32(
+piState pi_cuda_gemm_fp32(
     float *__restrict__ A,
     float *__restrict__ B,
     float *__restrict__ C,
@@ -368,7 +368,7 @@ piState piCudaGemmFp32(
     return piSuccess;
 }
 
-piState piCudaGemmFp64(
+piState pi_cuda_gemm_fp32(
     double *__restrict__ A,
     double *__restrict__ B,
     double *__restrict__ C,

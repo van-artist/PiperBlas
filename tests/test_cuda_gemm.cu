@@ -93,9 +93,9 @@ static Result run_case(int N)
     CHECK_CUDA(cudaMemcpy(dC64, hC64.data(), csz * sizeof(double), cudaMemcpyHostToDevice));
 
     auto ms32 = time_avg_ms<float>(2, 5, [&]()
-                                   { (void)piCudaGemmFp32(dA32, dB32, dC32, 1.0f, 0.0f, m, k, n); });
+                                   { (void)pi_cuda_gemm_fp32(dA32, dB32, dC32, 1.0f, 0.0f, m, k, n); });
     auto ms64 = time_avg_ms<double>(2, 5, [&]()
-                                    { (void)piCudaGemmFp64(dA64, dB64, dC64, 1.0, 0.0, m, k, n); });
+                                    { (void)pi_cuda_gemm_fp32(dA64, dB64, dC64, 1.0, 0.0, m, k, n); });
 
     CHECK_CUDA(cudaFree(dA32));
     CHECK_CUDA(cudaFree(dB32));
