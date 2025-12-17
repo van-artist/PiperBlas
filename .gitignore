@@ -4,3 +4,4 @@ report/
 data/
 logs/
 .vs/
+compile.sh
