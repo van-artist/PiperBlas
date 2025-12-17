@@ -1,7 +1,7 @@
 #if !defined(PIPER_HAVE_CUDA) || !PIPER_HAVE_CUDA
 #include <cstdio>
 
-int main()
+int main(int argc, char **argv)
 {
     std::fprintf(stderr, "CUDA support is disabled.\n");
     return 0;
