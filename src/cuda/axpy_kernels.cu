@@ -16,5 +16,5 @@ piState pi_cuda_axpy(int n, float alpha, const float *__restrict__ x, float *__r
     int blockSize = 256;
     int numBlocks = (n + blockSize - 1) / blockSize;
     axpy_kernel<<<numBlocks, blockSize>>>(n, alpha, x, y);
-    return PI_SUCCESS;
+    return piSuccess;
 }
