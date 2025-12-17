@@ -28,3 +28,4 @@ inline float cuda_time_avg_ms(F launch, int warmup, int iters)
 
     return ms / (float)iters;
 }
+
