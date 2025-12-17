@@ -5,8 +5,9 @@ int main()
 {
 
     std::cout << "Hello PiperRT" << std::endl;
-#ifndef PIPER_HAVE_CUDA
-    print_cuda_info();
+#if PIPER_HAVE_CUDA
+    print_cuda_info(0);
 #endif
+
     return 0;
 }
