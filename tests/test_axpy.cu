@@ -49,7 +49,7 @@ int main()
 
         cudaEventRecord(s1);
         for (int i = 0; i < iters; ++i)
-            axpy(n, alpha, dx, dy_my);
+            pi_cuda_axpy(n, alpha, dx, dy_my);
         cudaEventRecord(e1);
         cudaEventSynchronize(e1);
 

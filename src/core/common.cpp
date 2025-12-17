@@ -1,8 +1,10 @@
-#include "utils.h"
+#include "core/common.h"
 
-#include <cuda_runtime.h>
 #include <cstdio>
 #include <cstdlib>
+#if defined(PIPER_HAVE_CUDA) && PIPER_HAVE_CUDA
+#include <cuda_runtime.h>
+#endif
 
 void pi_free(void **p)
 {
@@ -13,7 +15,9 @@ void pi_free(void **p)
     }
 }
 
-void print_cuda_important_attrs(int device)
+#if defined(PIPER_HAVE_CUDA) && PIPER_HAVE_CUDA
+
+void print_cuda_info(int device)
 {
     CHECK_CUDA(cudaSetDevice(device));
 
@@ -171,4 +175,12 @@ void print_cuda_important_attrs(int device)
 
     printf("+-------------------------------+----------------------+-"
            "-------------------------------------------+\n");
+}
+#endif
+
+double wall_now()
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec + (double)tv.tv_usec * 1e-6;
 }

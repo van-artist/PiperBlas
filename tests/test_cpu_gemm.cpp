@@ -1,3 +1,13 @@
+#if !defined(PIPER_HAVE_BLAS) || !PIPER_HAVE_BLAS
+#include <cstdio>
+
+int main()
+{
+    std::fprintf(stderr, "CPU BLAS support is disabled.\n");
+    return 0;
+}
+
+#else
 #include <cblas.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,15 +20,9 @@
 
 #include "pi_blas.h"
 #include "pi_type.h"
-#include "utils.h"
-#include "pi_config.h"
+#include "core/common.h"
+#include "core/pi_config.h"
 
-static double wall_now()
-{
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (double)tv.tv_sec + (double)tv.tv_usec * 1e-6;
-}
 template <typename T>
 static void host_blas_gemm(CBLAS_LAYOUT layout,
                            CBLAS_TRANSPOSE transA,
@@ -118,14 +122,12 @@ static void run_cpu_test()
         size_t N;
         double blas_wall, blas_gflops;
         double v2_wall, v2_gflops, v2_err;
-        double v3_wall, v3_gflops, v3_err;
     };
 
     std::vector<Row> rows(n_scales);
 
     using PiFunc = piState (*)(T *, T *, T *, T, T, size_t, size_t, size_t);
-    PiFunc v2 = std::is_same<T, double>::value ? (PiFunc)piGemmFp64_v2 : (PiFunc)piGemmFp32_v2;
-    PiFunc v3 = std::is_same<T, double>::value ? (PiFunc)piGemmFp64_v3 : (PiFunc)piGemmFp32_v3;
+    PiFunc v2 = std::is_same<T, double>::value ? (PiFunc)piGemmFp64 : (PiFunc)piGemmFp32;
 
     for (size_t t = 0; t < n_scales; ++t)
     {
@@ -140,7 +142,6 @@ static void run_cpu_test()
         T *C0 = (T *)xalloc(csz * sizeof(T));
         T *Cblas = (T *)xalloc(csz * sizeof(T));
         T *C2 = (T *)xalloc(csz * sizeof(T));
-        T *C3 = (T *)xalloc(csz * sizeof(T));
 
         uint64_t seed = 1;
         fill_data(A, asz, &seed);
@@ -151,7 +152,7 @@ static void run_cpu_test()
         {
             Cblas[i] = C0[i];
             C2[i] = C0[i];
-            C3[i] = C0[i];
+            C2[i] = C0[i];
         }
 
         double ops = 2.0 * (double)m * (double)k * (double)n;
@@ -190,13 +191,6 @@ static void run_cpu_test()
         row.v2_gflops = ops / row.v2_wall * 1e-9;
         row.v2_err = eval_max_err(C2);
 
-        double w4 = wall_now();
-        v3(A, B, C3, alpha, beta, m, k, n);
-        double w5 = wall_now();
-        row.v3_wall = w5 - w4;
-        row.v3_gflops = ops / row.v3_wall * 1e-9;
-        row.v3_err = eval_max_err(C3);
-
         rows[t] = row;
 
         free(A);
@@ -204,23 +198,20 @@ static void run_cpu_test()
         free(C0);
         free(Cblas);
         free(C2);
-        free(C3);
     }
 
     printf("==== CPU only %s ====\n", precision_name<T>());
-    printf("%8s | %10s %10s | %10s %10s %10s | %10s %10s %10s\n",
+    printf("%8s | %10s %10s | %10s %10s %10s\n",
            "N",
            "blas_ms", "blas_GF/s",
-           "v2_ms", "v2_GF/s", "v2_err",
-           "v3_ms", "v3_GF/s", "v3_err");
+           "v2_ms", "v2_GF/s", "v2_err");
 
     for (const auto &r : rows)
     {
-        printf("%8zu | %10.3f %10.3f | %10.3f %10.3f %10.3e | %10.3f %10.3f %10.3e\n",
+        printf("%8zu | %10.3f %10.3f | %10.3f %10.3f %10.3e\n",
                r.N,
                r.blas_wall * 1e3, r.blas_gflops,
-               r.v2_wall * 1e3, r.v2_gflops, r.v2_err,
-               r.v3_wall * 1e3, r.v3_gflops, r.v3_err);
+               r.v2_wall * 1e3, r.v2_gflops, r.v2_err);
     }
 }
 
@@ -231,3 +222,4 @@ int main()
     // run_cpu_test<double>();
     return 0;
 }
+#endif

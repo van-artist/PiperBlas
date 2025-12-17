@@ -1,6 +1,12 @@
 #pragma once
 
+#include <cstdio>
+#include <cstdlib>
+#include <sys/time.h>
+
+#if defined(PIPER_HAVE_CUDA) && PIPER_HAVE_CUDA
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 #define CHECK_CUDA(call)                                            \
     do                                                              \
     {                                                               \
@@ -24,6 +30,27 @@
             std::exit(1);                                 \
         }                                                 \
     } while (0)
+#else
+#define CHECK_CUDA(call)                                \
+    do                                                  \
+    {                                                   \
+        (void)(call);                                   \
+        fprintf(stderr, "CUDA support is disabled.\n"); \
+        std::exit(EXIT_FAILURE);                        \
+    } while (0)
+
+#define CHECK_CUBLAS(call)                                \
+    do                                                    \
+    {                                                     \
+        (void)(call);                                     \
+        fprintf(stderr, "cuBLAS support is disabled.\n"); \
+        std::exit(EXIT_FAILURE);                          \
+    } while (0)
+#endif
 
 void pi_free(void **p);
-void print_cuda_important_attrs(int device);
+double wall_now();
+
+#if defined(PIPER_HAVE_CUDA) && PIPER_HAVE_CUDA
+void print_cuda_info(int device);
+#endif
