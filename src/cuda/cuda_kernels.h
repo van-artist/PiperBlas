@@ -14,7 +14,7 @@ piState pi_cuda_gemm_fp32(float *__restrict__ A,
                           float alpha,
                           float beta,
                           int M, int K, int N);
-piState pi_cuda_gemm_fp32(double *__restrict__ A,
+piState pi_cuda_gemm_fp64(double *__restrict__ A,
                           double *__restrict__ B,
                           double *__restrict__ C,
                           double alpha,
