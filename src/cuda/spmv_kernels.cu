@@ -1,9 +1,9 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
-#include "core/common.h"
-#include "pi_type.h"
-#include "pi_csr.h"
-#include "cuda/cuda_kernels.h"
+#include "cuda/cuda_common.cuh"
+#include "pi_type.hpp"
+#include "pi_csr.hpp"
+#include "cuda/cuda_kernels.cuh"
 
 template <typename T>
 __global__ void spmv_kernel(pi_csr A, const double *__restrict x, double *__restrict y)

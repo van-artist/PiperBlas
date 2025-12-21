@@ -1,14 +1,3 @@
-#if !defined(PIPER_HAVE_MKL) || !PIPER_HAVE_MKL
-#include <cstdio>
-
-int main()
-{
-    std::fprintf(stderr, "MKL support is disabled.\n");
-    return 0;
-}
-
-#else
-#include <mkl.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -17,19 +6,20 @@ int main()
 #include <string>
 #include <cstring>
 #include <ctime>
+#include <Eigen/Sparse>
 
-#include "pi_blas.h"
-#include "pi_csr.h"
-#include "pi_type.h"
-#include "pi_config.h"
-#include "core/test_utils.h"
+#include "pi_blas.hpp"
+#include "pi_csr.hpp"
+#include "pi_type.hpp"
+#include "core/pi_config.hpp"
+#include "core/test_utils.hpp"
 
 struct Result
 {
     std::string name;
     int m, n, nnz;
     double gflops_pi;
-    double gflops_mkl;
+    double gflops_eigen;
 };
 
 static Result run_case(const char *bin_path, int warmup, int iters)
@@ -47,25 +37,20 @@ static Result run_case(const char *bin_path, int warmup, int iters)
 
     double *x = (double *)aligned_alloc64((size_t)n * sizeof(double));
     double *y_pi = (double *)aligned_alloc64((size_t)m * sizeof(double));
-    double *y_mkl = (double *)aligned_alloc64((size_t)m * sizeof(double));
+    double *y_eigen = (double *)aligned_alloc64((size_t)m * sizeof(double));
 
     uint64_t seed = 1;
     fill_random_double(x, (size_t)n, &seed);
 
-    sparse_matrix_t Amkl;
-    matrix_descr descr;
-    descr.type = SPARSE_MATRIX_TYPE_GENERAL;
-    mkl_sparse_d_create_csr(&Amkl, SPARSE_INDEX_BASE_ZERO,
-                            m, n,
-                            (int *)A.row_ptr,
-                            (int *)A.row_ptr + 1,
-                            (int *)A.col_idx,
-                            (double *)A.values);
+    using MapSparse = Eigen::MappedSparseMatrix<double, Eigen::RowMajor, int>;
+    MapSparse Aeigen(m, n, nnz, A.row_ptr, A.col_idx, A.values);
+    Eigen::Map<const Eigen::VectorXd> x_map(x, n);
+    Eigen::Map<Eigen::VectorXd> y_eigen_map(y_eigen, m);
 
     for (int i = 0; i < warmup; ++i)
     {
         piSpMV(&A, x, y_pi);
-        mkl_sparse_d_mv(SPARSE_OPERATION_NON_TRANSPOSE, 1.0, Amkl, descr, x, 0.0, y_mkl);
+        y_eigen_map.noalias() = Aeigen * x_map;
     }
 
     auto time_cpu_s = [&](auto fn)
@@ -78,7 +63,7 @@ static Result run_case(const char *bin_path, int warmup, int iters)
     };
 
     double pi_s = time_cpu_s([&]() { piSpMV(&A, x, y_pi); });
-    double mkl_s = time_cpu_s([&]() { mkl_sparse_d_mv(SPARSE_OPERATION_NON_TRANSPOSE, 1.0, Amkl, descr, x, 0.0, y_mkl); });
+    double eigen_s = time_cpu_s([&]() { y_eigen_map.noalias() = Aeigen * x_map; });
 
     Result out{};
     out.name = bin_path;
@@ -87,12 +72,11 @@ static Result run_case(const char *bin_path, int warmup, int iters)
     out.nnz = nnz;
     const double ops = 2.0 * (double)nnz;
     out.gflops_pi = ops / pi_s * 1e-9;
-    out.gflops_mkl = ops / mkl_s * 1e-9;
+    out.gflops_eigen = ops / eigen_s * 1e-9;
 
-    mkl_sparse_destroy(Amkl);
     free(x);
     free(y_pi);
-    free(y_mkl);
+    free(y_eigen);
     csr_destroy(&A);
     return out;
 }
@@ -128,8 +112,8 @@ int main(int argc, char **argv)
     for (auto &p : inputs)
         results.push_back(run_case(p.c_str(), warmup, iters));
 
-    std::printf("==== SpMV CPU (MKL vs pi) ====\n");
-    std::printf("%32s | %8s %8s %10s | %10s %10s\n", "file", "m", "n", "nnz", "pi_GF/s", "mkl_GF/s");
+    std::printf("==== SpMV CPU (Eigen vs pi) ====\n");
+    std::printf("%32s | %8s %8s %10s | %10s %10s\n", "file", "m", "n", "nnz", "pi_GF/s", "eigen_GF/s");
 
     for (const auto &r : results)
     {
@@ -139,9 +123,8 @@ int main(int argc, char **argv)
 
         std::printf("%32s | %8d %8d %10d | %10.3f %10.3f\n",
                     base, r.m, r.n, r.nnz,
-                    r.gflops_pi, r.gflops_mkl);
+                    r.gflops_pi, r.gflops_eigen);
     }
 
     return 0;
 }
-#endif

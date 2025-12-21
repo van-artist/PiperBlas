@@ -5,7 +5,7 @@
 #include <iostream>
 #include <iomanip>
 
-#include "cuda/cuda_kernels.h"
+#include "cuda/cuda_kernels.cuh"
 
 int main()
 {

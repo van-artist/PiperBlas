@@ -1,7 +1,7 @@
 #pragma once
 #include <cuda_runtime.h>
-#include "pi_type.h"
-#include "pi_csr.h"
+#include "pi_type.hpp"
+#include "pi_csr.hpp"
 
 piState pi_cuda_axpy(int n, float alpha, const float *__restrict__ x, float *__restrict__ y);
 

@@ -16,14 +16,14 @@ int main()
 #include <string>
 #include <cstring>
 
-#include "pi_blas.h"
-#include "pi_csr.h"
-#include "pi_type.h"
-#include "pi_config.h"
-#include "core/common.h"
-#include "core/test_utils.h"
-#include "core/cuda_test_utils.h"
-#include "cuda/cuda_kernels.h"
+#include "pi_blas.hpp"
+#include "pi_csr.hpp"
+#include "pi_type.hpp"
+#include "core/pi_config.hpp"
+#include "core/test_utils.hpp"
+#include "cuda/cuda_common.cuh"
+#include "cuda/cuda_test_utils.cuh"
+#include "cuda/cuda_kernels.cuh"
 
 struct Result
 {
