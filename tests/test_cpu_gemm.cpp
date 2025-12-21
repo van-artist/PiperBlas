@@ -18,10 +18,10 @@ int main()
 #include <time.h>
 #include <sys/time.h>
 
-#include "pi_blas.h"
-#include "pi_type.h"
-#include "core/common.h"
-#include "core/pi_config.h"
+#include "pi_blas.hpp"
+#include "pi_type.hpp"
+#include "core/common.hpp"
+#include "core/pi_config.hpp"
 
 template <typename T>
 static void host_blas_gemm(CBLAS_LAYOUT layout,

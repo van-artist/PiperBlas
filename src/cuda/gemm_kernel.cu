@@ -1,7 +1,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include "pi_type.h"
+#include "pi_type.hpp"
 
 __host__ __device__ __forceinline__ bool is_aligned_16(const void *p)
 {

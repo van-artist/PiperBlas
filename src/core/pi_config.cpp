@@ -1,4 +1,4 @@
-#include "core/pi_config.h"
+#include "core/pi_config.hpp"
 
 #include <cerrno>
 #include <cstdio>

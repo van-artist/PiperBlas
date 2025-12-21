@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <pthread.h>
 
-#include "pi_blas.h"
-#include "core/pi_config.h"
+#include "pi_blas.hpp"
+#include "core/pi_config.hpp"
 
 #define BLOCK_SIZE 128
 

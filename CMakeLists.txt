@@ -111,6 +111,7 @@ add_library(piper_rt_core STATIC
   src/core/common.cpp
   src/core/pi_config.cpp
   src/core/pi_csr.cpp
+  src/core/test_utils.cpp
 )
 
 add_library(piper-rt::core ALIAS piper_rt_core)
@@ -165,6 +166,7 @@ if(PIPER_HAVE_CUDA)
     src/cuda/axpy_kernels.cu
     src/cuda/gemm_kernel.cu
     src/cuda/spmv_kernels.cu
+    src/cuda/cuda_common.cu
   )
 
   add_library(piper-rt::cuda ALIAS piper_rt_cuda)
@@ -190,14 +192,21 @@ if(PIPER_HAVE_CUDA)
 endif()
 
 if(PIPER_BUILD_TESTS)
+  find_package(Eigen3 QUIET)
+  if(NOT Eigen3_FOUND)
+    message(FATAL_ERROR "Eigen3 is required for CPU SpMV tests")
+  endif()
   file(GLOB TEST_SOURCES_CPP CONFIGURE_DEPENDS tests/*.cpp)
   file(GLOB TEST_SOURCES_CU  CONFIGURE_DEPENDS tests/*.cu)
 
-  foreach(test_src ${TEST_SOURCES_CPP})
-    get_filename_component(test_name ${test_src} NAME_WE)
-    add_executable(${test_name} ${test_src})
-    target_link_libraries(${test_name} PRIVATE piper-rt::blas)
-  endforeach()
+    foreach(test_src ${TEST_SOURCES_CPP})
+      get_filename_component(test_name ${test_src} NAME_WE)
+      add_executable(${test_name} ${test_src})
+      target_link_libraries(${test_name} PRIVATE piper-rt::blas)
+      if(test_name STREQUAL "test_spmv_cpu")
+        target_link_libraries(${test_name} PRIVATE Eigen3::Eigen)
+      endif()
+    endforeach()
 
   if(PIPER_HAVE_CUDA)
     foreach(test_src ${TEST_SOURCES_CU})
