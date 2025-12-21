@@ -1,5 +1,5 @@
 #pragma once
-#include "pi_type.h"
+#include "pi_type.hpp"
 
 typedef struct
 {

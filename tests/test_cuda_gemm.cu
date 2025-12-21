@@ -13,8 +13,8 @@ int main(int argc, char **argv)
 #include <vector>
 #include <cstring>
 
-#include "core/common.h"
-#include "cuda/cuda_kernels.h"
+#include "cuda/cuda_common.cuh"
+#include "cuda/cuda_kernels.cuh"
 
 template <typename T>
 static void fill_value(std::vector<T> &buf, T v)

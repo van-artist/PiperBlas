@@ -1,4 +1,4 @@
-#include "core/test_utils.h"
+#include "core/test_utils.hpp"
 
 #include <cstdio>
 #include <cstdlib>
