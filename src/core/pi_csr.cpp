@@ -1,6 +1,6 @@
-#include "pi_type.h"
-#include "core/common.h"
-#include "pi_csr.h"
+#include "pi_type.hpp"
+#include "core/common.hpp"
+#include "pi_csr.hpp"
 
 #include <cerrno>
 #include <cstdint>
@@ -41,6 +41,13 @@ piState csr_from_bin(const char *src_file, pi_csr *dist)
     if (!src_file || !dist)
         return piErrBadHeader;
 
+    dist->n_rows = 0;
+    dist->n_cols = 0;
+    dist->nnz = 0;
+    dist->row_ptr = nullptr;
+    dist->col_idx = nullptr;
+    dist->values = nullptr;
+
     FILE *f = std::fopen(src_file, "rb");
     if (!f)
     {
@@ -80,6 +87,78 @@ piState csr_from_bin(const char *src_file, pi_csr *dist)
     const int n_rows = (int)nrows_s32;
     const int n_cols = (int)ncols_s32;
     const int nnz = (int)nnz_u32;
+
+    constexpr size_t header_bytes = sizeof(nrows_s32) + sizeof(ncols_s32) + sizeof(nnz_u32);
+
+    if (std::fseek(f, 0, SEEK_END) != 0)
+    {
+        std::fclose(f);
+        return piErrIO;
+    }
+
+    long file_size_long = std::ftell(f);
+    if (file_size_long < 0)
+    {
+        std::fclose(f);
+        return piErrIO;
+    }
+
+    const size_t file_size = (size_t)file_size_long;
+    if (file_size < header_bytes)
+    {
+        std::fprintf(stderr, "CSR 文件过小，头部不完整。\n");
+        std::fclose(f);
+        return piErrBadHeader;
+    }
+
+    auto safe_mul = [](size_t a, size_t b, size_t &out) -> bool
+    {
+        if (a == 0 || b == 0)
+        {
+            out = 0;
+            return true;
+        }
+        if (a > (SIZE_MAX / b))
+            return false;
+        out = a * b;
+        return true;
+    };
+
+    size_t rows_bytes = 0, idx_bytes = 0, vals_bytes = 0;
+    if (!safe_mul((size_t)n_rows + 1, sizeof(uint32_t), rows_bytes) ||
+        !safe_mul((size_t)nnz, sizeof(uint32_t), idx_bytes) ||
+        !safe_mul((size_t)nnz, sizeof(double), vals_bytes))
+    {
+        std::fprintf(stderr, "CSR 尺寸过大，发生溢出。\n");
+        std::fclose(f);
+        return piErrBadHeader;
+    }
+
+    size_t required = header_bytes;
+    auto safe_add = [](size_t a, size_t b, size_t &out) -> bool
+    {
+        if (a > SIZE_MAX - b)
+            return false;
+        out = a + b;
+        return true;
+    };
+
+    if (!safe_add(required, rows_bytes, required) ||
+        !safe_add(required, idx_bytes, required) ||
+        !safe_add(required, vals_bytes, required) ||
+        required > file_size)
+    {
+        std::fprintf(stderr, "CSR 文件损坏或尺寸异常，要求 %zu 字节，实际 %zu 字节。\n",
+                     required, file_size);
+        std::fclose(f);
+        return piErrBadHeader;
+    }
+
+    if (std::fseek(f, (long)header_bytes, SEEK_SET) != 0)
+    {
+        std::fclose(f);
+        return piErrIO;
+    }
 
     auto row_ptr = std::unique_ptr<int[], decltype(&std::free)>(
         static_cast<int *>(std::malloc(((size_t)n_rows + 1) * sizeof(int))), &std::free);

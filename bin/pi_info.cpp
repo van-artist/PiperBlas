@@ -1,13 +1,15 @@
 #include <iostream>
-#include "core/common.h"
+#include "core/common.hpp"
+#include "cuda/cuda_common.cuh"
+#include "core/pi_cluster.hpp"
 
 int main()
 {
+    std::cout << "Hello PiperRT\n"
+              << std::endl;
 
-    std::cout << "Hello PiperRT" << std::endl;
-#if PIPER_HAVE_CUDA
+    print_cpu_info();
     print_cuda_info(0);
-#endif
-
+    std::cout << ClusterContext::instance().node_num() << std::endl;
     return 0;
 }

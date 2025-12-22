@@ -1,8 +1,8 @@
-#include "pi_blas.h"
-#include "core/pi_config.h"
-#include "pi_type.h"
-#include "pi_csr.h"
-#include "core/common.h"
+#include "pi_blas.hpp"
+#include "core/pi_config.hpp"
+#include "pi_type.hpp"
+#include "pi_csr.hpp"
+#include "core/common.hpp"
 
 #include <cstdlib>
 #include <pthread.h>
@@ -62,7 +62,7 @@ piState piSpMV(const pi_csr *__restrict A, double *__restrict x, double *__restr
         return piSuccess;
 
     // 小规模矩阵/单线程处理
-    int thread_num = std::min(config()->thread_num, n_rows);
+    int thread_num = std::min(PiConfig::instance().thread_num(), n_rows);
     if (thread_num <= 1 || nnz < 1024)
     {
         for (int i = 0; i < n_rows; ++i)

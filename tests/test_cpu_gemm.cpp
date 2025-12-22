@@ -1,27 +1,21 @@
-#if !defined(PIPER_HAVE_BLAS) || !PIPER_HAVE_BLAS
 #include <cstdio>
 
-int main()
-{
-    std::fprintf(stderr, "CPU BLAS support is disabled.\n");
-    return 0;
-}
-
-#else
 #include <cblas.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
 #include <vector>
+#include <string>
 #include <type_traits>
 #include <time.h>
 #include <sys/time.h>
 
-#include "pi_blas.h"
-#include "pi_type.h"
-#include "core/common.h"
-#include "core/pi_config.h"
+#include "pi_blas.hpp"
+#include "pi_type.hpp"
+#include "core/common.hpp"
+#include "core/pi_config.hpp"
+#include "core/test_utils.hpp"
 
 template <typename T>
 static void host_blas_gemm(CBLAS_LAYOUT layout,
@@ -79,28 +73,6 @@ const char *precision_name<float>() { return "fp32"; }
 template <>
 const char *precision_name<double>() { return "fp64"; }
 
-static void *xalloc(size_t n_bytes)
-{
-    void *p = NULL;
-    if (posix_memalign(&p, 64, n_bytes) != 0 || !p)
-    {
-        fprintf(stderr, "alloc fail\n");
-        exit(1);
-    }
-    return p;
-}
-
-template <typename T>
-static void fill_data(T *x, size_t n, uint64_t *seed)
-{
-    for (size_t i = 0; i < n; i++)
-    {
-        *seed = (*seed * 2862933555777941757ULL) + 3037000493ULL;
-        double v = ((double)(*seed >> 11) / (double)(1ULL << 53)) * 2.0 - 1.0;
-        x[i] = static_cast<T>(v);
-    }
-}
-
 template <typename T>
 static void run_cpu_test()
 {
@@ -120,8 +92,8 @@ static void run_cpu_test()
     struct Row
     {
         size_t N;
-        double blas_wall, blas_gflops;
-        double v2_wall, v2_gflops, v2_err;
+        double blas_ms, blas_gflops;
+        double v2_ms, v2_gflops, v2_err;
     };
 
     std::vector<Row> rows(n_scales);
@@ -137,16 +109,16 @@ static void run_cpu_test()
         size_t bsz = k * n;
         size_t csz = m * n;
 
-        T *A = (T *)xalloc(asz * sizeof(T));
-        T *B = (T *)xalloc(bsz * sizeof(T));
-        T *C0 = (T *)xalloc(csz * sizeof(T));
-        T *Cblas = (T *)xalloc(csz * sizeof(T));
-        T *C2 = (T *)xalloc(csz * sizeof(T));
+        T *A = (T *)aligned_alloc64(asz * sizeof(T));
+        T *B = (T *)aligned_alloc64(bsz * sizeof(T));
+        T *C0 = (T *)aligned_alloc64(csz * sizeof(T));
+        T *Cblas = (T *)aligned_alloc64(csz * sizeof(T));
+        T *C2 = (T *)aligned_alloc64(csz * sizeof(T));
 
         uint64_t seed = 1;
-        fill_data(A, asz, &seed);
-        fill_data(B, bsz, &seed);
-        fill_data(C0, csz, &seed);
+        fill_random(A, asz, &seed);
+        fill_random(B, bsz, &seed);
+        fill_random(C0, csz, &seed);
 
         for (size_t i = 0; i < csz; ++i)
         {
@@ -157,20 +129,17 @@ static void run_cpu_test()
 
         double ops = 2.0 * (double)m * (double)k * (double)n;
 
-        double w0 = wall_now();
-        host_blas_gemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                       (int)m, (int)n, (int)k,
-                       alpha,
-                       A, (int)k,
-                       B, (int)n,
-                       beta,
-                       Cblas, (int)n);
-        double w1 = wall_now();
-
         Row row{};
         row.N = N;
-        row.blas_wall = w1 - w0;
-        row.blas_gflops = ops / row.blas_wall * 1e-9;
+        row.blas_ms = time_avg_ms(0, 1, [&]()
+                                  { host_blas_gemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                                                   (int)m, (int)n, (int)k,
+                                                   alpha,
+                                                   A, (int)k,
+                                                   B, (int)n,
+                                                   beta,
+                                                   Cblas, (int)n); });
+        row.blas_gflops = ops / (row.blas_ms * 1e-3) * 1e-9;
 
         auto eval_max_err = [&](const T *X) -> double
         {
@@ -184,11 +153,9 @@ static void run_cpu_test()
             return max_err;
         };
 
-        double w2 = wall_now();
-        v2(A, B, C2, alpha, beta, m, k, n);
-        double w3 = wall_now();
-        row.v2_wall = w3 - w2;
-        row.v2_gflops = ops / row.v2_wall * 1e-9;
+        row.v2_ms = time_avg_ms(0, 1, [&]()
+                                { v2(A, B, C2, alpha, beta, m, k, n); });
+        row.v2_gflops = ops / (row.v2_ms * 1e-3) * 1e-9;
         row.v2_err = eval_max_err(C2);
 
         rows[t] = row;
@@ -200,26 +167,29 @@ static void run_cpu_test()
         free(C2);
     }
 
-    printf("==== CPU only %s ====\n", precision_name<T>());
-    printf("%8s | %10s %10s | %10s %10s %10s\n",
-           "N",
-           "blas_ms", "blas_GF/s",
-           "v2_ms", "v2_GF/s", "v2_err");
+    TablePrinter table(
+        std::string("==== CPU only ") + precision_name<T>() + " ====",
+        {"N", "blas_ms", "blas_GF/s", "v2_ms", "v2_GF/s", "v2_err"},
+        {TablePrinter::Align::Right, TablePrinter::Align::Right, TablePrinter::Align::Right,
+         TablePrinter::Align::Right, TablePrinter::Align::Right, TablePrinter::Align::Right});
 
     for (const auto &r : rows)
     {
-        printf("%8zu | %10.3f %10.3f | %10.3f %10.3f %10.3e\n",
-               r.N,
-               r.blas_wall * 1e3, r.blas_gflops,
-               r.v2_wall * 1e3, r.v2_gflops, r.v2_err);
+        table.add_row({
+            format_int64((std::int64_t)r.N, 0),
+            format_fixed(r.blas_ms, 10, 3),
+            format_fixed(r.blas_gflops, 10, 3),
+            format_fixed(r.v2_ms, 10, 3),
+            format_fixed(r.v2_gflops, 10, 3),
+            format_scientific(r.v2_err, 10, 3)});
     }
+
+    table.print();
 }
 
 int main()
 {
-    config_init();
     run_cpu_test<float>();
     // run_cpu_test<double>();
     return 0;
 }
-#endif

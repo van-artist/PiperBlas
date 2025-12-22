@@ -1,51 +1,20 @@
-#if !defined(PIPER_HAVE_CUDA) || !PIPER_HAVE_CUDA
 #include <cstdio>
 
-int main(int argc, char **argv)
-{
-    std::fprintf(stderr, "CUDA support is disabled.\n");
-    return 0;
-}
-
-#else
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <vector>
 #include <cstring>
 
-#include "core/common.h"
-#include "cuda/cuda_kernels.h"
+#include "cuda/cuda_common.cuh"
+#include "cuda/cuda_kernels.cuh"
+#include "cuda/cuda_test_utils.cuh"
+#include "core/test_utils.hpp"
 
 template <typename T>
 static void fill_value(std::vector<T> &buf, T v)
 {
     for (auto &x : buf)
         x = v;
-}
-
-template <typename T>
-static float time_avg_ms(int warmup, int iters, auto launch)
-{
-    cudaEvent_t start, stop;
-    CHECK_CUDA(cudaEventCreate(&start));
-    CHECK_CUDA(cudaEventCreate(&stop));
-
-    for (int i = 0; i < warmup; ++i)
-        launch();
-    CHECK_CUDA(cudaDeviceSynchronize());
-
-    CHECK_CUDA(cudaEventRecord(start));
-    for (int i = 0; i < iters; ++i)
-        launch();
-    CHECK_CUDA(cudaEventRecord(stop));
-    CHECK_CUDA(cudaEventSynchronize(stop));
-
-    float ms = 0.0f;
-    CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
-
-    CHECK_CUDA(cudaEventDestroy(start));
-    CHECK_CUDA(cudaEventDestroy(stop));
-    return ms / (float)iters;
 }
 
 struct Result
@@ -92,10 +61,12 @@ static Result run_case(int N)
     CHECK_CUDA(cudaMemcpy(dB64, hB64.data(), bsz * sizeof(double), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(dC64, hC64.data(), csz * sizeof(double), cudaMemcpyHostToDevice));
 
-    auto ms32 = time_avg_ms<float>(2, 5, [&]()
-                                   { (void)pi_cuda_gemm_fp32(dA32, dB32, dC32, 1.0f, 0.0f, m, k, n); });
-    auto ms64 = time_avg_ms<double>(2, 5, [&]()
-                                    { (void)pi_cuda_gemm_fp32(dA64, dB64, dC64, 1.0, 0.0, m, k, n); });
+    auto ms32 = cuda_time_avg_ms([&]()
+                                 { (void)pi_cuda_gemm_fp32(dA32, dB32, dC32, 1.0f, 0.0f, m, k, n); },
+                                 2, 5);
+    auto ms64 = cuda_time_avg_ms([&]()
+                                 { (void)pi_cuda_gemm_fp64(dA64, dB64, dC64, 1.0, 0.0, m, k, n); },
+                                 2, 5);
 
     CHECK_CUDA(cudaFree(dA32));
     CHECK_CUDA(cudaFree(dB32));
@@ -139,16 +110,22 @@ int main(int argc, char **argv)
         Ns.assign(richN, richN + sizeof(richN) / sizeof(richN[0]));
     }
 
-    printf("==== CUDA GEMM (timing only) ====\n");
-    printf("%8s | %10s %10s | %10s %10s\n", "N", "fp32_ms", "fp32_GF/s", "fp64_ms", "fp64_GF/s");
+    TablePrinter table("==== CUDA GEMM (timing only) ====",
+                       {"N", "fp32_ms", "fp32_GF/s", "fp64_ms", "fp64_GF/s"});
 
     for (int N : Ns)
     {
         Result r = run_case(N);
-        printf("%8d | %10.3f %10.3f | %10.3f %10.3f\n",
-               r.N, r.ms_fp32, r.gflops_fp32, r.ms_fp64, r.gflops_fp64);
+        table.add_row({
+            format_int64(r.N, 0),
+            format_fixed(r.ms_fp32, 10, 3),
+            format_fixed(r.gflops_fp32, 10, 3),
+            format_fixed(r.ms_fp64, 10, 3),
+            format_fixed(r.gflops_fp64, 10, 3),
+        });
     }
+
+    table.print();
 
     return 0;
 }
-#endif

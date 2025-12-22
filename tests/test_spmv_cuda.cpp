@@ -1,13 +1,5 @@
-#if !defined(PIPER_HAVE_CUDA) || !PIPER_HAVE_CUDA
 #include <cstdio>
 
-int main()
-{
-    std::fprintf(stderr, "CUDA support is disabled.\n");
-    return 0;
-}
-
-#else
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <cstdlib>
@@ -16,14 +8,14 @@ int main()
 #include <string>
 #include <cstring>
 
-#include "pi_blas.h"
-#include "pi_csr.h"
-#include "pi_type.h"
-#include "pi_config.h"
-#include "core/common.h"
-#include "core/test_utils.h"
-#include "core/cuda_test_utils.h"
-#include "cuda/cuda_kernels.h"
+#include "pi_blas.hpp"
+#include "pi_csr.hpp"
+#include "pi_type.hpp"
+#include "core/pi_config.hpp"
+#include "core/test_utils.hpp"
+#include "cuda/cuda_common.cuh"
+#include "cuda/cuda_test_utils.cuh"
+#include "cuda/cuda_kernels.cuh"
 
 struct Result
 {
@@ -81,8 +73,10 @@ static Result run_case(const char *bin_path, int warmup, int iters)
     }
     CHECK_CUDA(cudaDeviceSynchronize());
 
-    float ms64 = cuda_time_avg_ms([&]() { (void)pi_cuda_spmv_fp64(&A_dev, d_x, d_y); }, warmup, iters);
-    float ms32 = cuda_time_avg_ms([&]() { (void)pi_cuda_spmv_fp32(&A_dev, d_x, d_y); }, warmup, iters);
+    float ms64 = cuda_time_avg_ms([&]()
+                                  { (void)pi_cuda_spmv_fp64(&A_dev, d_x, d_y); }, warmup, iters);
+    float ms32 = cuda_time_avg_ms([&]()
+                                  { (void)pi_cuda_spmv_fp32(&A_dev, d_x, d_y); }, warmup, iters);
 
     Result out{};
     out.name = bin_path;
@@ -107,7 +101,6 @@ static Result run_case(const char *bin_path, int warmup, int iters)
 
 int main(int argc, char **argv)
 {
-    config_init();
 
     if (argc < 2)
     {
@@ -119,37 +112,31 @@ int main(int argc, char **argv)
     int warmup = parse_int_flag(argc, argv, "--warmup=", 2);
     int iters = parse_int_flag(argc, argv, "--iters=", 10);
 
-    std::vector<std::string> inputs;
-    if (is_directory(path))
-        inputs = list_files_in_dir(path);
-    else
-        inputs.push_back(path);
-
-    if (inputs.empty())
-    {
-        std::fprintf(stderr, "没有找到输入文件: %s\n", path);
-        return 1;
-    }
+    std::vector<std::string> inputs = collect_inputs_or_exit(path, argv[0]);
 
     std::vector<Result> results;
     results.reserve(inputs.size());
     for (auto &p : inputs)
         results.push_back(run_case(p.c_str(), warmup, iters));
 
-    std::printf("==== SpMV CUDA (timing only) ====\n");
-    std::printf("%32s | %8s %8s %10s | %10s %10s\n", "file", "m", "n", "nnz", "fp64_GF/s", "fp32_GF/s");
+    TablePrinter table("==== SpMV CUDA (timing only) ====",
+                       {"file", "m", "n", "nnz", "fp64_GF/s", "fp32_GF/s"},
+                       {TablePrinter::Align::Left, TablePrinter::Align::Right, TablePrinter::Align::Right,
+                        TablePrinter::Align::Right, TablePrinter::Align::Right, TablePrinter::Align::Right});
 
     for (const auto &r : results)
     {
-        const char *name = r.name.c_str();
-        const char *base = std::strrchr(name, '/');
-        base = base ? base + 1 : name;
-
-        std::printf("%32s | %8d %8d %10d | %10.3f %10.3f\n",
-                    base, r.m, r.n, r.nnz,
-                    r.gflops_fp64, r.gflops_fp32);
+        table.add_row({
+            basename_of(r.name),
+            format_int64(r.m, 0),
+            format_int64(r.n, 0),
+            format_int64(r.nnz, 0),
+            format_fixed(r.gflops_fp64, 10, 3),
+            format_fixed(r.gflops_fp32, 10, 3),
+        });
     }
+
+    table.print();
 
     return 0;
 }
-#endif

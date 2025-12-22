@@ -1,7 +1,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-#include "pi_type.h"
+#include "pi_type.hpp"
 
 __host__ __device__ __forceinline__ bool is_aligned_16(const void *p)
 {
@@ -368,7 +368,7 @@ piState pi_cuda_gemm_fp32(
     return piSuccess;
 }
 
-piState pi_cuda_gemm_fp32(
+piState pi_cuda_gemm_fp64(
     double *__restrict__ A,
     double *__restrict__ B,
     double *__restrict__ C,

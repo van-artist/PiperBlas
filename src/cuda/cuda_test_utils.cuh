@@ -1,7 +1,8 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include "core/common.h"
+
+#include "cuda/cuda_common.cuh"
 
 template <class F>
 inline float cuda_time_avg_ms(F launch, int warmup, int iters)
@@ -28,4 +29,3 @@ inline float cuda_time_avg_ms(F launch, int warmup, int iters)
 
     return ms / (float)iters;
 }
-

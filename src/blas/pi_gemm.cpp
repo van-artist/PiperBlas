@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <pthread.h>
 
-#include "pi_blas.h"
-#include "core/pi_config.h"
+#include "pi_blas.hpp"
+#include "core/pi_config.hpp"
 
 #define BLOCK_SIZE 128
 
@@ -115,7 +115,7 @@ static piState piGemmImpl(T *A, T *B, T *C,
                           T alpha, T beta,
                           size_t m, size_t k, size_t n)
 {
-    const int thread_num_cfg = config()->thread_num;
+    const int thread_num_cfg = PiConfig::instance().thread_num();
     const int thread_num = (thread_num_cfg > 0) ? thread_num_cfg : 1;
 
     const size_t MB = BLOCK_SIZE;
