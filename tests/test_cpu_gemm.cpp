@@ -73,28 +73,6 @@ const char *precision_name<float>() { return "fp32"; }
 template <>
 const char *precision_name<double>() { return "fp64"; }
 
-static void *xalloc(size_t n_bytes)
-{
-    void *p = NULL;
-    if (posix_memalign(&p, 64, n_bytes) != 0 || !p)
-    {
-        fprintf(stderr, "alloc fail\n");
-        exit(1);
-    }
-    return p;
-}
-
-template <typename T>
-static void fill_data(T *x, size_t n, uint64_t *seed)
-{
-    for (size_t i = 0; i < n; i++)
-    {
-        *seed = (*seed * 2862933555777941757ULL) + 3037000493ULL;
-        double v = ((double)(*seed >> 11) / (double)(1ULL << 53)) * 2.0 - 1.0;
-        x[i] = static_cast<T>(v);
-    }
-}
-
 template <typename T>
 static void run_cpu_test()
 {
@@ -131,16 +109,16 @@ static void run_cpu_test()
         size_t bsz = k * n;
         size_t csz = m * n;
 
-        T *A = (T *)xalloc(asz * sizeof(T));
-        T *B = (T *)xalloc(bsz * sizeof(T));
-        T *C0 = (T *)xalloc(csz * sizeof(T));
-        T *Cblas = (T *)xalloc(csz * sizeof(T));
-        T *C2 = (T *)xalloc(csz * sizeof(T));
+        T *A = (T *)aligned_alloc64(asz * sizeof(T));
+        T *B = (T *)aligned_alloc64(bsz * sizeof(T));
+        T *C0 = (T *)aligned_alloc64(csz * sizeof(T));
+        T *Cblas = (T *)aligned_alloc64(csz * sizeof(T));
+        T *C2 = (T *)aligned_alloc64(csz * sizeof(T));
 
         uint64_t seed = 1;
-        fill_data(A, asz, &seed);
-        fill_data(B, bsz, &seed);
-        fill_data(C0, csz, &seed);
+        fill_random(A, asz, &seed);
+        fill_random(B, bsz, &seed);
+        fill_random(C0, csz, &seed);
 
         for (size_t i = 0; i < csz; ++i)
         {
@@ -211,7 +189,6 @@ static void run_cpu_test()
 
 int main()
 {
-    config_init();
     run_cpu_test<float>();
     // run_cpu_test<double>();
     return 0;

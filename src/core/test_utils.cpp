@@ -24,12 +24,7 @@ void *aligned_alloc64(std::size_t bytes)
 
 void fill_random_double(double *x, std::size_t n, std::uint64_t *seed)
 {
-    for (std::size_t i = 0; i < n; i++)
-    {
-        *seed = (*seed * 2862933555777941757ULL) + 3037000493ULL;
-        double v = ((double)(*seed >> 11) / (double)(1ULL << 53)) * 2.0 - 1.0;
-        x[i] = v;
-    }
+    fill_random<double>(x, n, seed);
 }
 
 int parse_int_flag(int argc, char **argv, const char *key, int defv)
@@ -97,6 +92,26 @@ std::vector<std::string> list_files_in_dir(const char *dir_path)
     closedir(d);
     std::sort(files.begin(), files.end());
     return files;
+}
+
+std::vector<std::string> collect_inputs_or_exit(const char *path, const char *program_name)
+{
+    std::vector<std::string> inputs;
+    if (is_directory(path))
+    {
+        inputs = list_files_in_dir(path);
+    }
+    else if (is_regular_file(path))
+    {
+        inputs.push_back(path);
+    }
+
+    if (inputs.empty())
+    {
+        std::fprintf(stderr, "%s: 输入路径无效或为空: %s\n", program_name ? program_name : "program", path);
+        std::exit(1);
+    }
+    return inputs;
 }
 
 std::string basename_of(const std::string &path)

@@ -123,6 +123,7 @@ add_library(piper_rt_core STATIC
   src/core/pi_config.cpp
   src/core/pi_csr.cpp
   src/core/test_utils.cpp
+  src/core/pi_cluster.cpp
 )
 
 add_library(piper-rt::core ALIAS piper_rt_core)
@@ -143,14 +144,22 @@ endif()
 target_compile_definitions(piper_rt_core PUBLIC
   PIPER_HAVE_BLAS=$<BOOL:${PIPER_HAVE_BLAS}>
   PIPER_HAVE_MKL=$<BOOL:${PIPER_HAVE_MKL}>
+  PIPER_HAVE_MPI=$<BOOL:${PIPER_HAVE_MPI}>
   PIPER_HAVE_CUDA=$<BOOL:${PIPER_HAVE_CUDA}>
 )
 
-add_library(piper_rt_blas STATIC
+set(PIPER_BLAS_SRCS
   src/blas/pi_gemm.cpp
   src/blas/pi_spmv.cpp
-  src/blas/pi_summa.cpp
 )
+
+if(PIPER_HAVE_MPI)
+  list(APPEND PIPER_BLAS_SRCS src/blas/pi_summa.cpp)
+else()
+  message(STATUS "Skipping MPI-dependent source: src/blas/pi_summa.cpp")
+endif()
+
+add_library(piper_rt_blas STATIC ${PIPER_BLAS_SRCS})
 
 add_library(piper-rt::blas ALIAS piper_rt_blas)
 

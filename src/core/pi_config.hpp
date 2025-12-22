@@ -1,12 +1,20 @@
 #pragma once
 #include <stdbool.h>
 
-typedef struct
+class PiConfig
 {
-    int thread_num;
+public:
+    static PiConfig &instance();
 
-} pi_config;
+    int thread_num() const { return thread_num_; }
 
-void config_init();
-const pi_config *config();
-void config_destroy();
+    PiConfig(const PiConfig &) = delete;
+    PiConfig &operator=(const PiConfig &) = delete;
+
+private:
+    PiConfig();
+    void load_from_env();
+    int getenv_int(const char *name, int defval);
+
+    int thread_num_{1};
+};

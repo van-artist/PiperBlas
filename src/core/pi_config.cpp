@@ -3,13 +3,8 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
-#include <pthread.h>
 
-// 单例模式管理全局资源
-static pi_config g_cfg;
-static pthread_once_t g_cfg_once = PTHREAD_ONCE_INIT;
-
-static int getenv_int(const char *name, int defval)
+int PiConfig::getenv_int(const char *name, int defval)
 {
     const char *env = std::getenv(name);
     if (!env)
@@ -27,21 +22,12 @@ static int getenv_int(const char *name, int defval)
     return static_cast<int>(val);
 }
 
-static void config_do_init()
-{
-    g_cfg.thread_num = getenv_int("PI_THREAD_NUM", 1);
-}
+PiConfig::PiConfig() { load_from_env(); }
 
-void config_init()
-{
-    pthread_once(&g_cfg_once, config_do_init);
-}
+void PiConfig::load_from_env() { thread_num_ = getenv_int("PI_THREAD_NUM", 1); }
 
-const pi_config *config()
+PiConfig &PiConfig::instance()
 {
-    return &g_cfg;
-}
-
-void config_destroy()
-{
+    static PiConfig cfg;
+    return cfg;
 }

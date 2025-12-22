@@ -101,7 +101,6 @@ static Result run_case(const char *bin_path, int warmup, int iters)
 
 int main(int argc, char **argv)
 {
-    config_init();
 
     if (argc < 2)
     {
@@ -113,17 +112,7 @@ int main(int argc, char **argv)
     int warmup = parse_int_flag(argc, argv, "--warmup=", 2);
     int iters = parse_int_flag(argc, argv, "--iters=", 10);
 
-    std::vector<std::string> inputs;
-    if (is_directory(path))
-        inputs = list_files_in_dir(path);
-    else
-        inputs.push_back(path);
-
-    if (inputs.empty())
-    {
-        std::fprintf(stderr, "没有找到输入文件: %s\n", path);
-        return 1;
-    }
+    std::vector<std::string> inputs = collect_inputs_or_exit(path, argv[0]);
 
     std::vector<Result> results;
     results.reserve(inputs.size());

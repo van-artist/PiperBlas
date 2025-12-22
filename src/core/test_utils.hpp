@@ -3,12 +3,24 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "core/common.hpp"
 
 void *aligned_alloc64(std::size_t bytes);
 void fill_random_double(double *x, std::size_t n, std::uint64_t *seed);
+template <class T>
+inline void fill_random(T *x, std::size_t n, std::uint64_t *seed)
+{
+    static_assert(std::is_floating_point<T>::value, "fill_random expects floating point type");
+    for (std::size_t i = 0; i < n; i++)
+    {
+        *seed = (*seed * 2862933555777941757ULL) + 3037000493ULL;
+        double v = ((double)(*seed >> 11) / (double)(1ULL << 53)) * 2.0 - 1.0;
+        x[i] = static_cast<T>(v);
+    }
+}
 
 int parse_int_flag(int argc, char **argv, const char *key, int defv);
 
@@ -16,6 +28,7 @@ bool is_directory(const char *path);
 bool is_regular_file(const char *path);
 std::string join_path(const std::string &dir, const std::string &name);
 std::vector<std::string> list_files_in_dir(const char *dir_path);
+std::vector<std::string> collect_inputs_or_exit(const char *path, const char *program_name);
 
 // Measure average duration (ms) of repeated invocations of fn.
 template <class F>

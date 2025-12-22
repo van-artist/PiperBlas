@@ -62,7 +62,7 @@ piState piSpMV(const pi_csr *__restrict A, double *__restrict x, double *__restr
         return piSuccess;
 
     // 小规模矩阵/单线程处理
-    int thread_num = std::min(config()->thread_num, n_rows);
+    int thread_num = std::min(PiConfig::instance().thread_num(), n_rows);
     if (thread_num <= 1 || nnz < 1024)
     {
         for (int i = 0; i < n_rows; ++i)
