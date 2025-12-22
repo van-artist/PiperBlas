@@ -20,6 +20,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 option(PIPER_BUILD_TESTS       "Build tests" ON)
 option(PIPER_ENABLE_MKL        "Enable MKL detection (for MKL tests/paths)" ON)
+option(PIPER_ENABLE_EIGEN      "Enable Eigen support (for Eigen-based tests)" ON)
 
 set(PIPER_ENABLE_CPU_BLAS ON)
 set(PIPER_ENABLE_CUDA ON)
@@ -33,13 +34,35 @@ set(PIPER_OPT_FLAGS
 )
 
 find_package(Threads REQUIRED)
-find_package(MPI REQUIRED)
-find_package(Eigen3 REQUIRED)
+
+set(PIPER_HAVE_EIGEN OFF)
+if(PIPER_ENABLE_EIGEN)
+  find_package(Eigen3 QUIET)
+  if(Eigen3_FOUND)
+    set(PIPER_HAVE_EIGEN ON)
+  else()
+    message(STATUS "Eigen3 not found; Eigen-dependent components will be skipped")
+  endif()
+else()
+  message(STATUS "Eigen support disabled via PIPER_ENABLE_EIGEN=OFF")
+endif()
 
 add_library(piper_rt_build INTERFACE)
-target_link_libraries(piper_rt_build INTERFACE Threads::Threads MPI::MPI_CXX)
+target_link_libraries(piper_rt_build INTERFACE Threads::Threads)
 target_compile_options(piper_rt_build INTERFACE ${PIPER_OPT_FLAGS})
 target_compile_features(piper_rt_build INTERFACE cxx_std_17)
+
+option(PIPER_ENABLE_MPI "Enable MPI support" ON)
+set(PIPER_HAVE_MPI OFF)
+if(PIPER_ENABLE_MPI)
+  find_package(MPI QUIET)
+  if(MPI_FOUND)
+    set(PIPER_HAVE_MPI ON)
+    target_link_libraries(piper_rt_build INTERFACE MPI::MPI_CXX)
+  else()
+    message(WARNING "MPI requested but not found; MPI support disabled")
+  endif()
+endif()
 
 set(PIPER_HAVE_MKL OFF)
 
@@ -118,6 +141,7 @@ target_compile_definitions(piper_rt_core PUBLIC
 add_library(piper_rt_blas STATIC
   src/blas/pi_gemm.cpp
   src/blas/pi_spmv.cpp
+  src/blas/pi_summa.cpp
 )
 
 add_library(piper-rt::blas ALIAS piper_rt_blas)
@@ -166,20 +190,30 @@ set_target_properties(piper_rt_cuda PROPERTIES
 )
 
 if(PIPER_BUILD_TESTS)
-  add_library(piper_rt_test_deps INTERFACE)
-  target_link_libraries(piper_rt_test_deps INTERFACE Eigen3::Eigen)
-
   file(GLOB TEST_SOURCES_CPP CONFIGURE_DEPENDS tests/*.cpp)
   file(GLOB TEST_SOURCES_CU  CONFIGURE_DEPENDS tests/*.cu)
 
-    foreach(test_src ${TEST_SOURCES_CPP})
-      get_filename_component(test_name ${test_src} NAME_WE)
-      add_executable(${test_name} ${test_src})
-      target_link_libraries(${test_name} PRIVATE piper-rt::blas piper_rt_test_deps)
-      if(TARGET piper_rt_cuda)
-        target_link_libraries(${test_name} PRIVATE piper-rt::cuda)
-      endif()
-    endforeach()
+  set(TEST_SPMV_CPU "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_spmv_cpu.cpp")
+  list(REMOVE_ITEM TEST_SOURCES_CPP "${TEST_SPMV_CPU}")
+
+  foreach(test_src ${TEST_SOURCES_CPP})
+    get_filename_component(test_name ${test_src} NAME_WE)
+    add_executable(${test_name} ${test_src})
+    target_link_libraries(${test_name} PRIVATE piper-rt::blas)
+    if(TARGET piper_rt_cuda)
+      target_link_libraries(${test_name} PRIVATE piper-rt::cuda)
+    endif()
+  endforeach()
+
+  if(PIPER_HAVE_EIGEN)
+    add_executable(test_spmv_cpu "${TEST_SPMV_CPU}")
+    target_link_libraries(test_spmv_cpu PRIVATE piper-rt::blas Eigen3::Eigen)
+    if(TARGET piper_rt_cuda)
+      target_link_libraries(test_spmv_cpu PRIVATE piper-rt::cuda)
+    endif()
+  else()
+    message(STATUS "Skipping Eigen-dependent test: test_spmv_cpu")
+  endif()
 
   if(PIPER_HAVE_CUDA)
     foreach(test_src ${TEST_SOURCES_CU})
@@ -224,7 +258,10 @@ message(STATUS "PIPER_ENABLE_CPU_BLAS  = ${PIPER_ENABLE_CPU_BLAS}")
 message(STATUS "PIPER_HAVE_BLAS        = ${PIPER_HAVE_BLAS}")
 message(STATUS "PIPER_ENABLE_MKL       = ${PIPER_ENABLE_MKL}")
 message(STATUS "PIPER_HAVE_MKL         = ${PIPER_HAVE_MKL}")
-message(STATUS "MPI_CXX                = ${MPI_CXX_FOUND}")
+message(STATUS "PIPER_ENABLE_MPI       = ${PIPER_ENABLE_MPI}")
+message(STATUS "PIPER_HAVE_MPI         = ${PIPER_HAVE_MPI}")
+message(STATUS "PIPER_ENABLE_EIGEN     = ${PIPER_ENABLE_EIGEN}")
+message(STATUS "PIPER_HAVE_EIGEN       = ${PIPER_HAVE_EIGEN}")
 message(STATUS "OpenBLAS lib           = ${PIPER_OPENBLAS_LIB}")
 message(STATUS "MKL_ROOT               = ${MKL_ROOT}")
 message(STATUS "================================")
