@@ -89,20 +89,28 @@ endif()
 
 set(PIPER_HAVE_BLAS OFF)
 
-find_package(BLAS REQUIRED)
+if(PIPER_ENABLE_CPU_BLAS)
+  find_package(BLAS QUIET)
 
-find_path(PIPER_CBLAS_INCLUDE_DIR
-  NAMES cblas.h
-  HINTS "${PIPER_OPENBLAS_ROOT}" "$ENV{OpenBLAS_HOME}" "$ENV{OPENBLAS_ROOT}" "$ENV{CONDA_PREFIX}" "/usr"
-  PATH_SUFFIXES include include/openblas include/x86_64-linux-gnu include/x86_64-linux-gnu/openblas-pthread
-)
+  if(BLAS_FOUND)
+    find_path(PIPER_CBLAS_INCLUDE_DIR
+      NAMES cblas.h
+      HINTS "${PIPER_OPENBLAS_ROOT}" "$ENV{OpenBLAS_HOME}" "$ENV{OPENBLAS_ROOT}" "$ENV{CONDA_PREFIX}" "/usr"
+      PATH_SUFFIXES include include/openblas include/x86_64-linux-gnu include/x86_64-linux-gnu/openblas-pthread
+    )
 
-add_library(Piper::CBLAS INTERFACE IMPORTED)
-if(PIPER_CBLAS_INCLUDE_DIR)
-  target_include_directories(Piper::CBLAS INTERFACE "${PIPER_CBLAS_INCLUDE_DIR}")
+    add_library(Piper::CBLAS INTERFACE IMPORTED)
+    if(PIPER_CBLAS_INCLUDE_DIR)
+      target_include_directories(Piper::CBLAS INTERFACE "${PIPER_CBLAS_INCLUDE_DIR}")
+    endif()
+    target_link_libraries(Piper::CBLAS INTERFACE BLAS::BLAS)
+    set(PIPER_HAVE_BLAS ON)
+  else()
+    message(STATUS "BLAS not found; BLAS-dependent components will be skipped")
+  endif()
+else()
+  message(STATUS "BLAS support disabled via PIPER_ENABLE_CPU_BLAS=OFF")
 endif()
-target_link_libraries(Piper::CBLAS INTERFACE BLAS::BLAS)
-set(PIPER_HAVE_BLAS ON)
 
 enable_language(CUDA)
 set(CMAKE_CUDA_STANDARD 17)
@@ -146,7 +154,10 @@ add_library(piper_rt_blas STATIC
 
 add_library(piper-rt::blas ALIAS piper_rt_blas)
 
-target_link_libraries(piper_rt_blas PUBLIC piper-rt::core Piper::CBLAS)
+target_link_libraries(piper_rt_blas PUBLIC piper-rt::core)
+if(PIPER_HAVE_BLAS)
+  target_link_libraries(piper_rt_blas PUBLIC Piper::CBLAS)
+endif()
 
 file(GLOB_RECURSE DSP_SRC CONFIGURE_DEPENDS
   src/dsp/*.cpp
@@ -194,7 +205,9 @@ if(PIPER_BUILD_TESTS)
   file(GLOB TEST_SOURCES_CU  CONFIGURE_DEPENDS tests/*.cu)
 
   set(TEST_SPMV_CPU "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_spmv_cpu.cpp")
+  set(TEST_CPU_GEMM "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cpu_gemm.cpp")
   list(REMOVE_ITEM TEST_SOURCES_CPP "${TEST_SPMV_CPU}")
+  list(REMOVE_ITEM TEST_SOURCES_CPP "${TEST_CPU_GEMM}")
 
   foreach(test_src ${TEST_SOURCES_CPP})
     get_filename_component(test_name ${test_src} NAME_WE)
@@ -213,6 +226,13 @@ if(PIPER_BUILD_TESTS)
     endif()
   else()
     message(STATUS "Skipping Eigen-dependent test: test_spmv_cpu")
+  endif()
+
+  if(PIPER_HAVE_BLAS)
+    add_executable(test_cpu_gemm "${TEST_CPU_GEMM}")
+    target_link_libraries(test_cpu_gemm PRIVATE piper-rt::blas Piper::CBLAS)
+  else()
+    message(STATUS "Skipping BLAS-dependent test: test_cpu_gemm")
   endif()
 
   if(PIPER_HAVE_CUDA)
