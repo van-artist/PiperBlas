@@ -1,13 +1,5 @@
-#if !defined(PIPER_HAVE_CUDA) || !PIPER_HAVE_CUDA
 #include <cstdio>
 
-int main()
-{
-    std::fprintf(stderr, "CUDA support is disabled.\n");
-    return 0;
-}
-
-#else
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <cstdlib>
@@ -81,8 +73,10 @@ static Result run_case(const char *bin_path, int warmup, int iters)
     }
     CHECK_CUDA(cudaDeviceSynchronize());
 
-    float ms64 = cuda_time_avg_ms([&]() { (void)pi_cuda_spmv_fp64(&A_dev, d_x, d_y); }, warmup, iters);
-    float ms32 = cuda_time_avg_ms([&]() { (void)pi_cuda_spmv_fp32(&A_dev, d_x, d_y); }, warmup, iters);
+    float ms64 = cuda_time_avg_ms([&]()
+                                  { (void)pi_cuda_spmv_fp64(&A_dev, d_x, d_y); }, warmup, iters);
+    float ms32 = cuda_time_avg_ms([&]()
+                                  { (void)pi_cuda_spmv_fp32(&A_dev, d_x, d_y); }, warmup, iters);
 
     Result out{};
     out.name = bin_path;
@@ -136,20 +130,24 @@ int main(int argc, char **argv)
     for (auto &p : inputs)
         results.push_back(run_case(p.c_str(), warmup, iters));
 
-    std::printf("==== SpMV CUDA (timing only) ====\n");
-    std::printf("%32s | %8s %8s %10s | %10s %10s\n", "file", "m", "n", "nnz", "fp64_GF/s", "fp32_GF/s");
+    TablePrinter table("==== SpMV CUDA (timing only) ====",
+                       {"file", "m", "n", "nnz", "fp64_GF/s", "fp32_GF/s"},
+                       {TablePrinter::Align::Left, TablePrinter::Align::Right, TablePrinter::Align::Right,
+                        TablePrinter::Align::Right, TablePrinter::Align::Right, TablePrinter::Align::Right});
 
     for (const auto &r : results)
     {
-        const char *name = r.name.c_str();
-        const char *base = std::strrchr(name, '/');
-        base = base ? base + 1 : name;
-
-        std::printf("%32s | %8d %8d %10d | %10.3f %10.3f\n",
-                    base, r.m, r.n, r.nnz,
-                    r.gflops_fp64, r.gflops_fp32);
+        table.add_row({
+            basename_of(r.name),
+            format_int64(r.m, 0),
+            format_int64(r.n, 0),
+            format_int64(r.nnz, 0),
+            format_fixed(r.gflops_fp64, 10, 3),
+            format_fixed(r.gflops_fp32, 10, 3),
+        });
     }
+
+    table.print();
 
     return 0;
 }
-#endif

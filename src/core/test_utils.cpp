@@ -4,6 +4,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <cstdint>
+#include <iomanip>
+#include <sstream>
+#include <utility>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -93,4 +97,84 @@ std::vector<std::string> list_files_in_dir(const char *dir_path)
     closedir(d);
     std::sort(files.begin(), files.end());
     return files;
+}
+
+std::string basename_of(const std::string &path)
+{
+    auto pos = path.find_last_of("/\\");
+    if (pos == std::string::npos)
+        return path;
+    return path.substr(pos + 1);
+}
+
+std::string format_fixed(double v, int width, int precision)
+{
+    std::ostringstream oss;
+    oss << std::fixed << std::setw(width) << std::setprecision(precision) << v;
+    return oss.str();
+}
+
+std::string format_int64(std::int64_t v, int width)
+{
+    std::ostringstream oss;
+    oss << std::setw(width) << v;
+    return oss.str();
+}
+
+std::string format_scientific(double v, int width, int precision)
+{
+    std::ostringstream oss;
+    oss << std::scientific << std::setw(width) << std::setprecision(precision) << v;
+    return oss.str();
+}
+
+TablePrinter::TablePrinter(std::string title,
+                           std::vector<std::string> headers,
+                           std::vector<Align> align)
+    : title_(std::move(title)), headers_(std::move(headers)), align_(std::move(align))
+{
+    if (align_.empty())
+    {
+        align_.resize(headers_.size(), Align::Right);
+        if (!align_.empty())
+            align_[0] = Align::Left;
+    }
+}
+
+void TablePrinter::add_row(std::vector<std::string> row)
+{
+    rows_.push_back(std::move(row));
+}
+
+void TablePrinter::print() const
+{
+    if (headers_.empty())
+        return;
+
+    std::vector<std::size_t> widths(headers_.size(), 0);
+    for (std::size_t i = 0; i < headers_.size(); ++i)
+        widths[i] = std::max(widths[i], headers_[i].size());
+    for (const auto &row : rows_)
+        for (std::size_t i = 0; i < widths.size() && i < row.size(); ++i)
+            widths[i] = std::max(widths[i], row[i].size());
+
+    auto print_row = [&](const std::vector<std::string> &row)
+    {
+        for (std::size_t i = 0; i < widths.size(); ++i)
+        {
+            const std::string cell = (i < row.size()) ? row[i] : "";
+            bool left = (i < align_.size() && align_[i] == Align::Left);
+            std::printf(left ? "%-*s" : "%*s", (int)widths[i], cell.c_str());
+            if (i + 1 < widths.size())
+                std::printf(" | ");
+        }
+        std::printf("\n");
+    };
+
+    if (!title_.empty())
+        std::printf("%s\n", title_.c_str());
+
+    print_row(headers_);
+    for (const auto &row : rows_)
+        print_row(row);
 }

@@ -47,23 +47,10 @@ static Result run_case(const char *bin_path, int warmup, int iters)
     Eigen::Map<const Eigen::VectorXd> x_map(x, n);
     Eigen::Map<Eigen::VectorXd> y_eigen_map(y_eigen, m);
 
-    for (int i = 0; i < warmup; ++i)
-    {
-        piSpMV(&A, x, y_pi);
-        y_eigen_map.noalias() = Aeigen * x_map;
-    }
-
-    auto time_cpu_s = [&](auto fn)
-    {
-        double t0 = (double)clock() / (double)CLOCKS_PER_SEC;
-        for (int i = 0; i < iters; ++i)
-            fn();
-        double t1 = (double)clock() / (double)CLOCKS_PER_SEC;
-        return (t1 - t0) / (double)iters;
-    };
-
-    double pi_s = time_cpu_s([&]() { piSpMV(&A, x, y_pi); });
-    double eigen_s = time_cpu_s([&]() { y_eigen_map.noalias() = Aeigen * x_map; });
+    double pi_ms = time_avg_ms(warmup, iters, [&]()
+                               { piSpMV(&A, x, y_pi); });
+    double eigen_ms = time_avg_ms(warmup, iters, [&]()
+                                  { y_eigen_map.noalias() = Aeigen * x_map; });
 
     Result out{};
     out.name = bin_path;
@@ -71,8 +58,8 @@ static Result run_case(const char *bin_path, int warmup, int iters)
     out.n = n;
     out.nnz = nnz;
     const double ops = 2.0 * (double)nnz;
-    out.gflops_pi = ops / pi_s * 1e-9;
-    out.gflops_eigen = ops / eigen_s * 1e-9;
+    out.gflops_pi = ops / (pi_ms * 1e-3) * 1e-9;
+    out.gflops_eigen = ops / (eigen_ms * 1e-3) * 1e-9;
 
     free(x);
     free(y_pi);
@@ -112,19 +99,24 @@ int main(int argc, char **argv)
     for (auto &p : inputs)
         results.push_back(run_case(p.c_str(), warmup, iters));
 
-    std::printf("==== SpMV CPU (Eigen vs pi) ====\n");
-    std::printf("%32s | %8s %8s %10s | %10s %10s\n", "file", "m", "n", "nnz", "pi_GF/s", "eigen_GF/s");
+    TablePrinter table("==== SpMV CPU (Eigen vs pi) ====",
+                       {"file", "m", "n", "nnz", "pi_GF/s", "eigen_GF/s"},
+                       {TablePrinter::Align::Left, TablePrinter::Align::Right, TablePrinter::Align::Right,
+                        TablePrinter::Align::Right, TablePrinter::Align::Right, TablePrinter::Align::Right});
 
     for (const auto &r : results)
     {
-        const char *name = r.name.c_str();
-        const char *base = std::strrchr(name, '/');
-        base = base ? base + 1 : name;
-
-        std::printf("%32s | %8d %8d %10d | %10.3f %10.3f\n",
-                    base, r.m, r.n, r.nnz,
-                    r.gflops_pi, r.gflops_eigen);
+        table.add_row({
+            basename_of(r.name),
+            format_int64(r.m, 0),
+            format_int64(r.n, 0),
+            format_int64(r.nnz, 0),
+            format_fixed(r.gflops_pi, 10, 3),
+            format_fixed(r.gflops_eigen, 10, 3),
+        });
     }
+
+    table.print();
 
     return 0;
 }

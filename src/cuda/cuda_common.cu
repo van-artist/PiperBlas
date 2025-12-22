@@ -5,7 +5,8 @@
 #include <cmath>
 
 #include <cuda_runtime.h>
-#include "core/common.h"
+#include "core/common.hpp"
+#include "cuda_common.cuh"
 
 static std::string format_bytes(unsigned long long bytes)
 {
