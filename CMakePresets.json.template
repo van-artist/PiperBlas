@@ -1,0 +1,19 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "ninja-clang-debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-ninja-clang-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "PIPER_ENABLE_CUDA": "OFF"
+      },
+      "environment": {
+        "MKLROOT": "/opt/intel/oneapi/mkl/2025.3",
+        "MKL_ROOT": "/opt/intel/oneapi/mkl/2025.3"
+      }
+    }
+  ]
+}

@@ -1,7 +1,8 @@
 .vscode/
-build/
+build*
 report/
 data/
 logs/
 .vs/
 compile.sh
+CMakePresets.json
