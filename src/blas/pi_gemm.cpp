@@ -209,16 +209,16 @@ static piState piGemmImpl(T *A, T *B, T *C,
     return piSuccess;
 }
 
-piState piGemmFp64(double *A, double *B, double *C,
-                   double alpha, double beta,
-                   size_t m, size_t k, size_t n)
+piState pi_gemm_fp64(double *A, double *B, double *C,
+                     double alpha, double beta,
+                     size_t m, size_t k, size_t n)
 {
     return piGemmImpl<double>(A, B, C, alpha, beta, m, k, n);
 }
 
-piState piGemmFp32(float *A, float *B, float *C,
-                   float alpha, float beta,
-                   size_t m, size_t k, size_t n)
+piState pi_gemm_fp32(float *A, float *B, float *C,
+                     float alpha, float beta,
+                     size_t m, size_t k, size_t n)
 {
     return piGemmImpl<float>(A, B, C, alpha, beta, m, k, n);
 }

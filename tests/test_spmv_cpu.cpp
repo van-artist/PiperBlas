@@ -48,7 +48,7 @@ static Result run_case(const char *bin_path, int warmup, int iters)
     Eigen::Map<Eigen::VectorXd> y_eigen_map(y_eigen, m);
 
     double pi_ms = time_avg_ms(warmup, iters, [&]()
-                               { piSpMV(&A, x, y_pi); });
+                               { pi_spmv(&A, x, y_pi); });
     double eigen_ms = time_avg_ms(warmup, iters, [&]()
                                   { y_eigen_map.noalias() = Aeigen * x_map; });
 

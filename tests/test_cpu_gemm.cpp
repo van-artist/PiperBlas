@@ -99,7 +99,7 @@ static void run_cpu_test()
     std::vector<Row> rows(n_scales);
 
     using PiFunc = piState (*)(T *, T *, T *, T, T, size_t, size_t, size_t);
-    PiFunc v2 = std::is_same<T, double>::value ? (PiFunc)piGemmFp64 : (PiFunc)piGemmFp32;
+    PiFunc v2 = std::is_same<T, double>::value ? (PiFunc)pi_gemm_fp64 : (PiFunc)pi_gemm_fp32;
 
     for (size_t t = 0; t < n_scales; ++t)
     {
@@ -175,13 +175,12 @@ static void run_cpu_test()
 
     for (const auto &r : rows)
     {
-        table.add_row({
-            format_int64((std::int64_t)r.N, 0),
-            format_fixed(r.blas_ms, 10, 3),
-            format_fixed(r.blas_gflops, 10, 3),
-            format_fixed(r.v2_ms, 10, 3),
-            format_fixed(r.v2_gflops, 10, 3),
-            format_scientific(r.v2_err, 10, 3)});
+        table.add_row({format_int64((std::int64_t)r.N, 0),
+                       format_fixed(r.blas_ms, 10, 3),
+                       format_fixed(r.blas_gflops, 10, 3),
+                       format_fixed(r.v2_ms, 10, 3),
+                       format_fixed(r.v2_gflops, 10, 3),
+                       format_scientific(r.v2_err, 10, 3)});
     }
 
     table.print();

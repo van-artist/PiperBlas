@@ -4,10 +4,11 @@
 class ClusterContext
 {
 public:
-    static void Init(MPI_Comm world = MPI_COMM_WORLD);
     static ClusterContext &instance();
 
     int node_num() const { return node_num_; }
+
+    static void init(MPI_Comm world = MPI_COMM_WORLD);
 
 private:
     ClusterContext(MPI_Comm world);

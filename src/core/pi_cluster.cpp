@@ -4,7 +4,7 @@
 
 ClusterContext *ClusterContext::instance_ = nullptr;
 
-void ClusterContext::Init(MPI_Comm world)
+void ClusterContext::init(MPI_Comm world)
 {
     if (instance_)
     {

@@ -50,7 +50,7 @@ static void *pi_spmv_worker(void *arg_)
     return NULL;
 }
 
-piState piSpMV(const pi_csr *__restrict A, double *__restrict x, double *__restrict y)
+piState pi_spmv(const pi_csr *__restrict A, double *__restrict x, double *__restrict y)
 {
     const int n_rows = A->n_rows;
     const int nnz = A->nnz;
