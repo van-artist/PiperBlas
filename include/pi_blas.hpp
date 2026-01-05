@@ -11,7 +11,7 @@ piState pi_gemm_fp64(double *A, double *B, double *C,
                      size_t m, size_t k, size_t n);
 piState pi_summa_fp64(double *A, double *B, double *C,
                       double alpha, double beta,
-                      int M, int K, int N, int p);
+                      int M, int K, int N, int pr, int pc, int mb, int nb);
 piState pi_summa_fp32(float *A, float *B, float *C,
                       float alpha, float beta,
-                      int m, int k, int n, int p);
+                      int m, int k, int n, int pr, int pc, int mb, int nb);

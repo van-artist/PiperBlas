@@ -1,5 +1,6 @@
 #pragma once
 #include <mpi.h>
+#include "pi_type.hpp"
 
 class ClusterContext
 {
@@ -9,6 +10,7 @@ public:
     int node_num() const { return node_num_; }
 
     static void init(MPI_Comm world = MPI_COMM_WORLD);
+    static void finalize();
 
 private:
     ClusterContext(MPI_Comm world);

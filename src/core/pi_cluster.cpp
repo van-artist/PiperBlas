@@ -20,6 +20,15 @@ void ClusterContext::init(MPI_Comm world)
 
     instance_ = new ClusterContext(world);
 }
+void ClusterContext::finalize()
+{
+    if (instance_)
+    {
+        delete instance_;
+        instance_ = nullptr;
+    }
+    MPI_Finalized(nullptr);
+}
 
 ClusterContext &ClusterContext::instance()
 {
